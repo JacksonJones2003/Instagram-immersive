@@ -15,9 +15,9 @@ Click here to add these patches to Morphe: https://morphe.software/add-source?gi
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.0.0-dev.4](https://github.com/JacksonJones2003/Instagram-immersive/releases/tag/v1.0.0-dev.4)**&nbsp;&nbsp;•&nbsp;&nbsp;`dev`&nbsp;&nbsp;•&nbsp;&nbsp;3 patches total
+> **[v1.0.0-dev.5](https://github.com/JacksonJones2003/Instagram-immersive/releases/tag/v1.0.0-dev.5)**&nbsp;&nbsp;•&nbsp;&nbsp;`dev`&nbsp;&nbsp;•&nbsp;&nbsp;2 patches total
 <details open>
-<summary>📦 Instagram&nbsp;&nbsp;•&nbsp;&nbsp;3 patches</summary>
+<summary>📦 Instagram&nbsp;&nbsp;•&nbsp;&nbsp;2 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -29,7 +29,6 @@ Click here to add these patches to Morphe: https://morphe.software/add-source?gi
 |----------|----------------|-----------|
 | [Hide tab bar in Reels](#hide-tab-bar-in-reels) | Hides the bottom tab bar while Reels is on screen. Use the back gesture to leave Reels. |  |
 | [Reels fullscreen](#reels-fullscreen) | Extends Reels behind the status bar and to the bottom of the screen. |  |
-| [Reels fullscreen debug](#reels-fullscreen-debug) | Copies a description of the Reels screen layout to the clipboard a few seconds after opening Reels. Only needed to report layout problems. |  |
 
 </details>
 

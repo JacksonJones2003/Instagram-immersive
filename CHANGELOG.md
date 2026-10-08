@@ -1,3 +1,9 @@
+## [1.0.0-dev.5](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.4...v1.0.0-dev.5) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Keep Reels filled after returning from messages, keep tab bar by default and remove debug patch ([1de7685](https://github.com/JacksonJones2003/Instagram-immersive/commit/1de7685464fed5a000d0ba79cf8fe0e7d1fc76c3))
+
 ## [1.0.0-dev.4](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-10-08)
 
 ### 🐛 Bug Fixes
