@@ -1,3 +1,9 @@
+## [1.0.0-dev.11](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.10...v1.0.0-dev.11) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Keep the rail progress bar while Instagram hides its own bar ([2fffbe7](https://github.com/JacksonJones2003/Instagram-immersive/commit/2fffbe7f6df88d802c1895e348994651f336330e))
+
 ## [1.0.0-dev.10](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.9...v1.0.0-dev.10) (2026-10-08)
 
 ### ✨ New Features
