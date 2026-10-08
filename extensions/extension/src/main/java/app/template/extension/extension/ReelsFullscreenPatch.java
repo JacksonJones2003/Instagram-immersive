@@ -27,9 +27,11 @@ import android.net.Uri;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.ViewTreeObserver;
@@ -105,6 +107,10 @@ public final class ReelsFullscreenPatch {
     private static final int MIN_BUTTONS = 3;
     private static final int GLASS_BLUR_DP = 20;
     private static final String MESSAGES_LINK = "instagram://direct-inbox";
+    // Line Instagram draws along the top of the tab bar.
+    private static final String TAB_BAR_LINE_ID = "tab_bar_shadow";
+    // How much the button under the finger grows while sliding over the tab bar.
+    private static final float HOVER_SCALE = 1.18f;
     private static final int RESTART_BUTTON_MARGIN_DP = 12;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
@@ -232,6 +238,7 @@ public final class ReelsFullscreenPatch {
         private final int buttonsId;
         private final int scrubberId;
         private final int contentId;
+        private final int tabBarLineId;
 
         // What Instagram had set before it was changed, to put it back when Reels is left.
         /** Left, top, right and bottom padding. */
@@ -253,6 +260,9 @@ public final class ReelsFullscreenPatch {
         private RestartButton restartView;
         private GlassBar tabGlass;
         private MessagesButton messagesView;
+        private BarTouch barTouch;
+        private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
+        private boolean hovering;
         private GlassBar railGlass;
         private WeakReference<View> lastTabBar = new WeakReference<>(null);
         private WeakReference<View> lastContent = new WeakReference<>(null);
@@ -293,6 +303,7 @@ public final class ReelsFullscreenPatch {
             buttonsId = resources.getIdentifier(BUTTONS_ID, "id", packageName);
             scrubberId = resources.getIdentifier(SCRUBBER_ID, "id", packageName);
             contentId = resources.getIdentifier(CONTENT_ID, "id", packageName);
+            tabBarLineId = resources.getIdentifier(TAB_BAR_LINE_ID, "id", packageName);
         }
 
         @Override
@@ -419,6 +430,16 @@ public final class ReelsFullscreenPatch {
                     floatContent(content, tabBar, decor);
                     styleBar(tabGlass, tabBar, tabGlass.floating ? content : null, false);
                     if (tabGlass.floating) floatLift = tabBar.getHeight();
+
+                    View line = lookup(decor, tabBarLineId, lastTabBarLine);
+                    if (line != null) {
+                        if (line != lastTabBarLine.get()) lastTabBarLine = new WeakReference<>(line);
+                        line.setAlpha(0f);
+                    }
+                    placeBarTouch(tabBar);
+                    hover(tabBar);
+                } else if (barTouch != null) {
+                    barTouch.setVisibility(View.GONE);
                 }
 
                 // Nothing runs underneath the rail, its glass shows the colors of the screen next to it.
@@ -449,6 +470,125 @@ public final class ReelsFullscreenPatch {
                 layoutChanged = true;
             }
             tabGlass.floating = floated.get() == content && params.bottomMargin == 0;
+        }
+
+        /** Puts the view that takes the touches of the tab bar on top of it. */
+        private void placeBarTouch(View tabBar) {
+            if (!(tabBar.getParent() instanceof ViewGroup)) return;
+            ViewGroup parent = (ViewGroup) tabBar.getParent();
+            if (barTouch == null) barTouch = new BarTouch(activity, this);
+            if (barTouch.getParent() != parent) {
+                if (barTouch.getParent() instanceof ViewGroup) ((ViewGroup) barTouch.getParent()).removeView(barTouch);
+                parent.addView(barTouch, new ViewGroup.LayoutParams(tabBar.getWidth(), tabBar.getHeight()));
+            } else if (parent.getChildAt(parent.getChildCount() - 1) != barTouch) {
+                barTouch.bringToFront();
+            }
+            ViewGroup.LayoutParams params = barTouch.getLayoutParams();
+            if (params.width != tabBar.getWidth() || params.height != tabBar.getHeight()) {
+                params.width = tabBar.getWidth();
+                params.height = tabBar.getHeight();
+                barTouch.setLayoutParams(params);
+            }
+            barTouch.setTranslationX(tabBar.getLeft() + tabBar.getTranslationX());
+            barTouch.setTranslationY(tabBar.getTop() + tabBar.getTranslationY());
+            barTouch.setVisibility(View.VISIBLE);
+        }
+
+        /** Button of the tab bar at a horizontal position inside it. */
+        private View buttonAt(View tabBar, float x) {
+            ViewGroup buttons = findButtons(tabBar);
+            if (buttons == null) return null;
+            float left = 0;
+            for (View view = buttons; view != tabBar; view = (View) view.getParent()) left += view.getLeft();
+            for (int i = 0; i < buttons.getChildCount(); i++) {
+                View child = buttons.getChildAt(i);
+                if (child.getVisibility() != View.VISIBLE) continue;
+                if (x >= left + child.getLeft() && x < left + child.getRight()) return child;
+            }
+            return null;
+        }
+
+        private boolean isCreateButton(View tabBar, View button) {
+            ViewGroup buttons = messagesTab ? findButtons(tabBar) : null;
+            return buttons != null && button != null && findCreateButton(buttons, true) == button;
+        }
+
+        /** The button under a sliding finger grows, like under a lens. */
+        private void hover(View tabBar) {
+            boolean dragging = tabGlass != null && tabGlass.dragging;
+            if (!dragging && !hovering) return;
+            hovering = dragging;
+
+            ViewGroup buttons = findButtons(tabBar);
+            if (buttons == null) return;
+            View under = dragging ? buttonAt(tabBar, tabGlass.dragX) : null;
+            for (int i = 0; i < buttons.getChildCount(); i++) {
+                View child = buttons.getChildAt(i);
+                float scale = child == under ? HOVER_SCALE : 1f;
+                child.setScaleX(scale);
+                child.setScaleY(scale);
+            }
+            if (messagesView != null) {
+                float scale = under != null && isCreateButton(tabBar, under) ? HOVER_SCALE : 1f;
+                messagesView.setScaleX(scale);
+                messagesView.setScaleY(scale);
+            }
+        }
+
+        void barDrag(float x) {
+            if (tabGlass != null) tabGlass.drag(x);
+        }
+
+        void barRelease(float x, boolean select) {
+            if (tabGlass != null) tabGlass.release();
+            if (select) barTap(x);
+        }
+
+        /** Presses the button at a position the way a finger would. */
+        void barTap(float x) {
+            try {
+                View tabBar = lastTabBar.get();
+                View button = tabBar == null ? null : buttonAt(tabBar, x);
+                if (button == null) return;
+                if (messagesView != null && messagesView.getVisibility() == View.VISIBLE
+                        && isCreateButton(tabBar, button)) {
+                    openMessages();
+                    return;
+                }
+
+                float centerX = button.getWidth() / 2f;
+                float centerY = button.getHeight() / 2f;
+                for (View view = button; view != tabBar; view = (View) view.getParent()) {
+                    centerX += view.getLeft();
+                    centerY += view.getTop();
+                }
+                long now = SystemClock.uptimeMillis();
+                MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, centerX, centerY, 0);
+                MotionEvent up = MotionEvent.obtain(now, now + 40, MotionEvent.ACTION_UP, centerX, centerY, 0);
+                try {
+                    tabBar.dispatchTouchEvent(down);
+                    tabBar.dispatchTouchEvent(up);
+                } finally {
+                    down.recycle();
+                    up.recycle();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "tab press failure", e);
+            }
+        }
+
+        /** Hands a touch on to Instagram's tab bar unchanged, used for long presses. */
+        void barForward(MotionEvent event) {
+            View tabBar = lastTabBar.get();
+            if (tabBar == null) return;
+            MotionEvent copy = MotionEvent.obtain(event);
+            try {
+                tabBar.dispatchTouchEvent(copy);
+            } catch (Exception e) {
+                Log.e(TAG, "tab touch failure", e);
+            } finally {
+                copy.recycle();
+            }
         }
 
         private View findTabBar(View decor) {
@@ -1460,11 +1600,24 @@ public final class ReelsFullscreenPatch {
         private boolean bubblePlaced;
         boolean light;
         boolean floating;
+        boolean dragging;
+        float dragX;
         /** A GlassBlur, only on Android versions that have it. */
         Object blur;
 
         GlassBar(Context context) {
             density = context.getResources().getDisplayMetrics().density;
+        }
+
+        void drag(float x) {
+            dragging = true;
+            dragX = x;
+            invalidateSelf();
+        }
+
+        void release() {
+            dragging = false;
+            invalidateSelf();
         }
 
         void clear() {
@@ -1495,7 +1648,7 @@ public final class ReelsFullscreenPatch {
 
             boolean horizontal = right - left > bottom - top;
             if (horizontal) {
-                next.set(left + 12 * density, top + 5 * density, right - 12 * density, bottom - 5 * density);
+                next.set(left + 12 * density, top + density, right - 12 * density, bottom - density);
             } else {
                 float center = (left + right) / 2f;
                 float half = Math.max(26 * density, (right - left) / 2f - 10 * density);
@@ -1515,8 +1668,21 @@ public final class ReelsFullscreenPatch {
             }
 
             boolean hadTarget = hasTarget;
-            hasTarget = selected != null;
-            if (hasTarget) {
+            hasTarget = selected != null || (dragging && horizontal);
+            if (dragging && horizontal) {
+                // The highlight follows the finger instead of the selected button.
+                float inset = 4 * density;
+                float width = selected != null ? selected.getWidth() - 2 * inset : pill.width() / 5f;
+                float center = Math.max(pill.left + inset + width / 2f,
+                        Math.min(pill.right - inset - width / 2f, dragX));
+                next.set(center - width / 2f, pill.top + inset, center + width / 2f, pill.bottom - inset);
+                changed |= !next.equals(target);
+                target.set(next);
+                if (!bubblePlaced) {
+                    bubble.set(target);
+                    bubblePlaced = true;
+                }
+            } else if (hasTarget) {
                 float inset = 4 * density;
                 if (horizontal) {
                     next.set(offsetX + selected.getLeft() + inset, pill.top + inset,
@@ -1590,11 +1756,19 @@ public final class ReelsFullscreenPatch {
                 // Glide a part of the remaining way on every frame.
                 float moved = glide();
                 float bubbleRadius = Math.min(bubble.width(), bubble.height()) / 2f;
-                paint.setColor(light ? 0x24000000 : 0x38FFFFFF);
+                // The highlight is a lens: what is behind the bar shows through it enlarged.
+                if (blurred) {
+                    ((GlassBlur) blur).lens(canvas, pill, bubble, bubbleRadius, dragging ? 1.35f : 1.12f);
+                }
+                if (dragging) {
+                    paint.setColor(light ? 0x2E000000 : 0x4DFFFFFF);
+                } else {
+                    paint.setColor(light ? 0x24000000 : 0x38FFFFFF);
+                }
                 canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(density);
-                paint.setColor(0x59FFFFFF);
+                paint.setStrokeWidth((dragging ? 1.5f : 1f) * density);
+                paint.setColor(dragging ? 0x99FFFFFF : 0x59FFFFFF);
                 canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
                 if (moved > 0.5f) invalidateSelf();
             }
@@ -1608,10 +1782,12 @@ public final class ReelsFullscreenPatch {
         }
 
         private float glide() {
-            float left = (target.left - bubble.left) * 0.3f;
-            float top = (target.top - bubble.top) * 0.3f;
-            float right = (target.right - bubble.right) * 0.3f;
-            float bottom = (target.bottom - bubble.bottom) * 0.3f;
+            // Stay close to a finger, ease over to a tapped button.
+            float pace = dragging ? 0.55f : 0.3f;
+            float left = (target.left - bubble.left) * pace;
+            float top = (target.top - bubble.top) * pace;
+            float right = (target.right - bubble.right) * pace;
+            float bottom = (target.bottom - bubble.bottom) * pace;
             float moved = Math.abs(left) + Math.abs(top) + Math.abs(right) + Math.abs(bottom);
             if (moved <= 0.5f) {
                 bubble.set(target);
@@ -1661,6 +1837,19 @@ public final class ReelsFullscreenPatch {
                 node.endRecording();
             }
             recorded = true;
+        }
+
+        /** Draws the part behind the highlight again, enlarged around its center. */
+        void lens(Canvas canvas, RectF pill, RectF bubble, float radius, float zoom) {
+            if (!recorded) return;
+            path.rewind();
+            path.addRoundRect(bubble, radius, radius, Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(path);
+            canvas.scale(zoom, zoom, bubble.centerX(), bubble.centerY());
+            canvas.translate(pill.left, pill.top);
+            canvas.drawRenderNode(node);
+            canvas.restore();
         }
 
         boolean draw(Canvas canvas, RectF pill, float radius) {
@@ -1718,6 +1907,74 @@ public final class ReelsFullscreenPatch {
             paint.setStrokeWidth(2f);
             canvas.drawPath(icon, paint);
             canvas.restore();
+        }
+    }
+
+    /**
+     * Sits on top of the tab bar and takes its touches: a tap presses the button under it,
+     * a slide moves the highlight along with the finger and presses the button it is let go on.
+     */
+    private static final class BarTouch extends View {
+        private final State state;
+        private final int slop;
+        private float downX;
+        private boolean dragging;
+        private boolean forwarding;
+        private MotionEvent downEvent;
+        private final Runnable longPress = () -> {
+            // Instagram has its own long presses, on the profile button for example.
+            if (dragging || downEvent == null) return;
+            forwarding = true;
+            BarTouch.this.state.barForward(downEvent);
+        };
+
+        BarTouch(Context context, State state) {
+            super(context);
+            this.state = state;
+            slop = ViewConfiguration.get(context).getScaledTouchSlop();
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            float x = event.getX();
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downX = x;
+                    dragging = false;
+                    forwarding = false;
+                    if (downEvent != null) downEvent.recycle();
+                    downEvent = MotionEvent.obtain(event);
+                    postDelayed(longPress, ViewConfiguration.getLongPressTimeout());
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (forwarding) {
+                        state.barForward(event);
+                        return true;
+                    }
+                    if (!dragging && Math.abs(x - downX) > slop) {
+                        dragging = true;
+                        removeCallbacks(longPress);
+                        if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+                    }
+                    if (dragging) state.barDrag(x);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    removeCallbacks(longPress);
+                    boolean lifted = event.getActionMasked() == MotionEvent.ACTION_UP;
+                    if (forwarding) {
+                        state.barForward(event);
+                    } else if (dragging) {
+                        state.barRelease(x, lifted);
+                    } else if (lifted) {
+                        state.barTap(x);
+                    }
+                    dragging = false;
+                    forwarding = false;
+                    return true;
+                default:
+                    return true;
+            }
         }
     }
 }
