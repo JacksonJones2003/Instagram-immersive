@@ -45,8 +45,10 @@ public final class ReelsFullscreenPatch {
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
     // Insets are whole pixels, allow for rounding done by Instagram.
     private static final int TOLERANCE_PX = 2;
-    // How far below the Reels view fixed sizes are looked for.
-    private static final int MAX_GROW_DEPTH = 6;
+    // Each reel page is rendered by one of these.
+    private static final String LITHO_VIEW_CLASS = "com.facebook.litho.LithoView";
+    private static final int MAX_CONTENT_DEPTH = 3;
+    private static final float MIN_SCALE = 1.01f;
     private static final int MAX_DUMP_DEPTH = 9;
     private static final int MAX_DUMP_LINES = 300;
     private static final long DUMP_DELAY_MS = 3000;
@@ -136,8 +138,8 @@ public final class ReelsFullscreenPatch {
         /** Undo actions for everything changed while Reels is on screen. */
         private final List<Runnable> undo = new ArrayList<>();
         private final Map<View, Boolean> adjusted = new WeakHashMap<>();
-        /** Original layout width and height of views that were grown to the new Reels height. */
-        private final Map<View, int[]> grown = new WeakHashMap<>();
+        /** Reel pages that were scaled up to the new Reels height. */
+        private final Map<View, Boolean> scaled = new WeakHashMap<>();
 
         private boolean applying;
         private boolean active;
@@ -199,7 +201,7 @@ public final class ReelsFullscreenPatch {
             }
             if (hideTabBar) hideTabBar(tabBar);
             expand(reels, decor, top, bottom);
-            grow(reels);
+            fill(reels);
 
             if (!dumped && debug) {
                 dumped = true;
@@ -335,37 +337,67 @@ public final class ReelsFullscreenPatch {
         }
 
         /**
-         * Reel pages and their video cards can be sized in pixels from the height the Reels view
-         * had before it was expanded. Those are resized to the new height.
+         * Instagram lays out the video card and its buttons for the height that was available
+         * below the status bar, so an expanded page keeps empty space at the bottom.
+         * The content of each page is scaled up until it uses the full height.
          */
-        private void grow(View reels) {
-            int height = reels.getHeight();
-            if (baseHeight <= 0 || height <= baseHeight + TOLERANCE_PX) return;
-            if (reels instanceof ViewGroup) growChildren((ViewGroup) reels, height, 0);
+        private void fill(View reels) {
+            if (!(reels instanceof ViewGroup)) return;
+            ViewGroup pager = (ViewGroup) reels;
+            if (pager.getChildCount() == 0 || !(pager.getChildAt(0) instanceof ViewGroup)) return;
+
+            ViewGroup pages = (ViewGroup) pager.getChildAt(0);
+            for (int i = 0; i < pages.getChildCount(); i++) {
+                View content = findContent(pages.getChildAt(i), 0);
+                if (content instanceof ViewGroup) scale((ViewGroup) content);
+            }
         }
 
-        private void growChildren(ViewGroup group, int height, int depth) {
+        private View findContent(View view, int depth) {
+            if (LITHO_VIEW_CLASS.equals(view.getClass().getName())) return view;
+            if (depth >= MAX_CONTENT_DEPTH || !(view instanceof ViewGroup)) return null;
+
+            ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
-                View child = group.getChildAt(i);
-                ViewGroup.LayoutParams params = child.getLayoutParams();
-
-                if (params != null && params.height > 0
-                        && Math.abs(params.height - baseHeight) <= TOLERANCE_PX) {
-                    if (!grown.containsKey(child)) {
-                        grown.put(child, new int[]{params.width, params.height});
-                    }
-                    // Keep the shape of 9:16 cards.
-                    boolean portraitCard = params.width > 0
-                            && Math.abs(params.width * 16 - params.height * 9) <= 16 * TOLERANCE_PX;
-                    if (portraitCard) params.width = Math.round(height * 9 / 16f);
-                    params.height = height;
-                    child.setLayoutParams(params);
-                }
-
-                if (depth < MAX_GROW_DEPTH && child instanceof ViewGroup) {
-                    growChildren((ViewGroup) child, height, depth + 1);
-                }
+                View content = findContent(group.getChildAt(i), depth + 1);
+                if (content != null) return content;
             }
+            return null;
+        }
+
+        private void scale(ViewGroup content) {
+            int width = content.getWidth();
+            int height = content.getHeight();
+            if (width == 0 || height == 0) return;
+
+            // Bounds of what the page actually shows.
+            int left = Integer.MAX_VALUE;
+            int top = Integer.MAX_VALUE;
+            int right = Integer.MIN_VALUE;
+            int bottom = Integer.MIN_VALUE;
+            for (int i = 0; i < content.getChildCount(); i++) {
+                View child = content.getChildAt(i);
+                if (child.getVisibility() != View.VISIBLE || child.getWidth() == 0 || child.getHeight() == 0) continue;
+                left = Math.min(left, child.getLeft());
+                top = Math.min(top, child.getTop());
+                right = Math.max(right, child.getRight());
+                bottom = Math.max(bottom, child.getBottom());
+            }
+            if (bottom <= top) return;
+
+            // Keep the margin above the card below it as well, and never push anything off the sides.
+            float center = width / 2f;
+            float reach = Math.max(center - left, right - center);
+            float scale = height / (float) (bottom + Math.max(top, 0));
+            if (reach > 0) scale = Math.min(scale, center / reach);
+            if (scale < MIN_SCALE) scale = 1f;
+
+            if (Math.abs(content.getScaleY() - scale) < 0.001f) return;
+            scaled.put(content, Boolean.TRUE);
+            content.setPivotX(center);
+            content.setPivotY(0);
+            content.setScaleX(scale);
+            content.setScaleY(scale);
         }
 
         private boolean isTopInset(int value, int top) {
@@ -387,15 +419,12 @@ public final class ReelsFullscreenPatch {
             }
             undo.clear();
             adjusted.clear();
-            for (Map.Entry<View, int[]> entry : grown.entrySet()) {
-                View view = entry.getKey();
-                ViewGroup.LayoutParams params = view == null ? null : view.getLayoutParams();
-                if (params == null) continue;
-                params.width = entry.getValue()[0];
-                params.height = entry.getValue()[1];
-                view.setLayoutParams(params);
+            for (View view : scaled.keySet()) {
+                if (view == null) continue;
+                view.setScaleX(1f);
+                view.setScaleY(1f);
             }
-            grown.clear();
+            scaled.clear();
             baseHeight = 0;
             showTabBar(tabBarId == 0 ? null : decor.findViewById(tabBarId));
             active = false;
