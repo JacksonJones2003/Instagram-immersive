@@ -227,6 +227,8 @@ public final class ReelsFullscreenPatch {
 
         private WeakReference<View> lastReels = new WeakReference<>(null);
         private WeakReference<View> dumpedPage = new WeakReference<>(null);
+        private int dumpedWidth;
+        private int dumpedHeight;
         private Runnable pendingDump;
         private boolean applying;
         private boolean active;
@@ -633,8 +635,9 @@ public final class ReelsFullscreenPatch {
             if (railShown) {
                 View page = currentPage(reels);
                 View candidate = page == null || scrubberId == 0 ? null : page.findViewById(scrubberId);
-                if (candidate instanceof ProgressBar && candidate.getVisibility() == View.VISIBLE
-                        && candidate.getWidth() > 0 && ((ProgressBar) candidate).getMax() > 0) {
+                // Instagram hides its own bar at times, for example next to the comments pane.
+                // It still tracks the video then, so it does not have to be visible.
+                if (candidate instanceof ProgressBar && ((ProgressBar) candidate).getMax() > 0) {
                     scrubber = candidate;
                 }
             }
@@ -877,8 +880,12 @@ public final class ReelsFullscreenPatch {
         /** Describes every reel the pager settles on and copies that to the clipboard. */
         private void watchPage(final View reels) {
             final View page = currentPage(reels);
-            if (page == null || page == dumpedPage.get()) return;
+            if (page == null) return;
+            // Opening the comments pane resizes the page without changing it.
+            if (page == dumpedPage.get() && page.getWidth() == dumpedWidth && page.getHeight() == dumpedHeight) return;
             dumpedPage = new WeakReference<>(page);
+            dumpedWidth = page.getWidth();
+            dumpedHeight = page.getHeight();
 
             final View decor = activity.getWindow().getDecorView();
             if (pendingDump != null) decor.removeCallbacks(pendingDump);
@@ -897,6 +904,19 @@ public final class ReelsFullscreenPatch {
             View decor = activity.getWindow().getDecorView();
             builder.append("decor=").append(decor.getWidth()).append('x').append(decor.getHeight()).append('\n');
             describe(builder, reels, "pager ");
+            View scrubber = scrubberId == 0 ? null : page.findViewById(scrubberId);
+            builder.append("rail=").append(navigationRailShown(decor));
+            if (scrubber == null) {
+                builder.append(" scrubber=none\n");
+            } else {
+                builder.append(" scrubber shown=").append(scrubber.isShown());
+                if (scrubber instanceof ProgressBar) {
+                    builder.append(" progress=").append(((ProgressBar) scrubber).getProgress())
+                            .append('/').append(((ProgressBar) scrubber).getMax());
+                }
+                builder.append('\n');
+                describe(builder, scrubber, "scrubber ");
+            }
             int[] lines = {0};
             describeTree(builder, page, 0, lines);
 
@@ -1027,6 +1047,8 @@ public final class ReelsFullscreenPatch {
             fraction = Math.max(0f, Math.min(1f, (event.getY() - top) / (bottom - top)));
             invalidate();
 
+            // A bar that was never laid out has no positions to seek to.
+            if (scrubber.getWidth() == 0) return true;
             // Instagram's progress bar is horizontal, a point along this bar is the same point along that one.
             int left = scrubber.getPaddingLeft();
             float x = left + fraction * (scrubber.getWidth() - left - scrubber.getPaddingRight());
