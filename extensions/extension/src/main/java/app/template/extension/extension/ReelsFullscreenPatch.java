@@ -2,9 +2,12 @@ package app.template.extension.extension;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -13,6 +16,8 @@ import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.widget.ImageView;
+import android.widget.Toast;
 
 import java.lang.ref.WeakReference;
 import java.util.Map;
@@ -47,12 +52,16 @@ public final class ReelsFullscreenPatch {
     private static final String LITHO_VIEW_CLASS = "com.facebook.litho.LithoView";
     private static final int MAX_CONTENT_DEPTH = 3;
     private static final float MIN_SCALE = 1.01f;
+    private static final int MAX_DUMP_DEPTH = 18;
+    private static final int MAX_DUMP_LINES = 400;
+    private static final long DUMP_DELAY_MS = 2500;
     // Stop adjusting when Instagram keeps putting its spacing back on every layout pass.
     private static final int MAX_CHURN = 50;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
     private static boolean registered;
     private static boolean hideTabBar;
+    private static boolean debug;
 
     private ReelsFullscreenPatch() {
     }
@@ -60,6 +69,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Hide tab bar in Reels" patch. */
     public static void enableHideTabBar() {
         hideTabBar = true;
+    }
+
+    /** Injection point. Added by the "Reels fullscreen debug" patch. */
+    public static void enableDebug() {
+        debug = true;
     }
 
     /** Injection point. Called from the application's onCreate. */
@@ -144,6 +158,8 @@ public final class ReelsFullscreenPatch {
         private final Map<View, Boolean> scaled = new WeakHashMap<>();
 
         private WeakReference<View> lastReels = new WeakReference<>(null);
+        private WeakReference<View> dumpedPage = new WeakReference<>(null);
+        private Runnable pendingDump;
         private boolean applying;
         private boolean active;
         private boolean tabBarHidden;
@@ -216,6 +232,7 @@ public final class ReelsFullscreenPatch {
                 churn = changed ? churn + 1 : 0;
             }
             fill(reels);
+            if (debug) watchPage(reels);
         }
 
         private View findReelsView(View decor) {
@@ -490,6 +507,100 @@ public final class ReelsFullscreenPatch {
             active = false;
             // The remembered spacing can be from before a fold or rotation, let Instagram redo it.
             decor.requestApplyInsets();
+        }
+
+        private View currentPage(View reels) {
+            if (!(reels instanceof ViewGroup)) return null;
+            ViewGroup pager = (ViewGroup) reels;
+            if (pager.getChildCount() == 0 || !(pager.getChildAt(0) instanceof ViewGroup)) return null;
+
+            ViewGroup pages = (ViewGroup) pager.getChildAt(0);
+            for (int i = 0; i < pages.getChildCount(); i++) {
+                View page = pages.getChildAt(i);
+                if (Math.abs(page.getTop()) <= 5 && Math.abs(page.getLeft()) <= 5) return page;
+            }
+            return null;
+        }
+
+        /** Describes every reel the pager settles on and copies that to the clipboard. */
+        private void watchPage(final View reels) {
+            final View page = currentPage(reels);
+            if (page == null || page == dumpedPage.get()) return;
+            dumpedPage = new WeakReference<>(page);
+
+            final View decor = activity.getWindow().getDecorView();
+            if (pendingDump != null) decor.removeCallbacks(pendingDump);
+            pendingDump = () -> {
+                try {
+                    if (currentPage(reels) == page) dump(reels, page);
+                } catch (Exception e) {
+                    Log.e(TAG, "dump failure", e);
+                }
+            };
+            decor.postDelayed(pendingDump, DUMP_DELAY_MS);
+        }
+
+        private void dump(View reels, View page) {
+            StringBuilder builder = new StringBuilder();
+            View decor = activity.getWindow().getDecorView();
+            builder.append("decor=").append(decor.getWidth()).append('x').append(decor.getHeight()).append('\n');
+            describe(builder, reels, "pager ");
+            int[] lines = {0};
+            describeTree(builder, page, 0, lines);
+
+            String text = builder.toString();
+            Log.d(TAG, text);
+            ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("Reels layout", text));
+                Toast.makeText(activity, "Reel layout copied to clipboard", Toast.LENGTH_SHORT).show();
+            }
+        }
+
+        private void describeTree(StringBuilder builder, View view, int depth, int[] lines) {
+            if (lines[0]++ >= MAX_DUMP_LINES) return;
+            StringBuilder indent = new StringBuilder();
+            for (int i = 0; i < depth; i++) indent.append(' ');
+            describe(builder, view, indent.toString());
+
+            if (depth >= MAX_DUMP_DEPTH || !(view instanceof ViewGroup)) return;
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                describeTree(builder, group.getChildAt(i), depth + 1, lines);
+            }
+        }
+
+        private void describe(StringBuilder builder, View view, String prefix) {
+            String name = "no-id";
+            if (view.getId() != View.NO_ID) {
+                try {
+                    name = activity.getResources().getResourceEntryName(view.getId());
+                } catch (Resources.NotFoundException ignored) {
+                }
+            }
+            int[] location = new int[2];
+            view.getLocationInWindow(location);
+
+            builder.append(prefix).append(view.getClass().getName()).append('#').append(name)
+                    .append(" vis=").append(view.getVisibility())
+                    .append(" at=").append(location[0]).append(',').append(location[1])
+                    .append(" size=").append(view.getWidth()).append('x').append(view.getHeight());
+            ViewGroup.LayoutParams params = view.getLayoutParams();
+            if (params != null) builder.append(" lp=").append(params.width).append('x').append(params.height);
+            if (view.getScaleY() != 1 || view.getTranslationY() != 0) {
+                builder.append(" sy=").append(view.getScaleY()).append(" ty=").append(view.getTranslationY());
+            }
+            if (view instanceof ImageView) {
+                ImageView image = (ImageView) view;
+                Drawable drawable = image.getDrawable();
+                builder.append(" scaleType=").append(image.getScaleType());
+                if (drawable != null) {
+                    builder.append(" drawable=").append(drawable.getIntrinsicWidth())
+                            .append('x').append(drawable.getIntrinsicHeight());
+                }
+            }
+            if (view.getContentDescription() != null) builder.append(" described");
+            builder.append('\n');
         }
     }
 }

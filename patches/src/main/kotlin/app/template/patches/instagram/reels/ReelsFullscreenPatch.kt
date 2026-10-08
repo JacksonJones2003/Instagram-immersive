@@ -57,3 +57,22 @@ val hideTabBarInReelsPatch = bytecodePatch(
         )
     }
 }
+
+@Suppress("unused")
+val reelsFullscreenDebugPatch = bytecodePatch(
+    name = "Reels fullscreen debug",
+    description = "Copies a description of the layout of each reel to the clipboard a few seconds " +
+        "after it is shown. Only needed to report layout problems.",
+    default = false,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableDebug()V",
+        )
+    }
+}
