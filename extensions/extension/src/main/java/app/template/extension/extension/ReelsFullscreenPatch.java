@@ -20,6 +20,9 @@ import android.widget.ImageView;
 import android.widget.Toast;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -52,6 +55,13 @@ public final class ReelsFullscreenPatch {
     private static final String LITHO_VIEW_CLASS = "com.facebook.litho.LithoView";
     private static final int MAX_CONTENT_DEPTH = 3;
     private static final float MIN_SCALE = 1.01f;
+    // Card that holds the video or photo of a reel.
+    private static final String MEDIA_ID = "clips_media_component";
+    private static final int MAX_MEDIA_DEPTH = 6;
+    // Media counts as letterboxed when it leaves this much of the card unused.
+    private static final float LETTERBOX_RATIO = 0.93f;
+    private static final float MIN_MEDIA_AREA = 0.25f;
+    private static final float MIN_ENLARGE = 1.02f;
     private static final int MAX_DUMP_DEPTH = 18;
     private static final int MAX_DUMP_LINES = 400;
     private static final long DUMP_DELAY_MS = 2500;
@@ -62,6 +72,7 @@ public final class ReelsFullscreenPatch {
     private static boolean registered;
     private static boolean hideTabBar;
     private static boolean debug;
+    private static boolean expandMedia;
 
     private ReelsFullscreenPatch() {
     }
@@ -69,6 +80,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Hide tab bar in Reels" patch. */
     public static void enableHideTabBar() {
         hideTabBar = true;
+    }
+
+    /** Injection point. Added by the "Expand photos in Reels" patch. */
+    public static void enableExpandMedia() {
+        expandMedia = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -143,6 +159,7 @@ public final class ReelsFullscreenPatch {
         private final int[] reelsViewIds;
         private final int tabBarId;
         private final int navigationRailId;
+        private final int mediaId;
 
         // What Instagram had set before it was changed, to put it back when Reels is left.
         /** Left, top, right and bottom padding. */
@@ -156,6 +173,11 @@ public final class ReelsFullscreenPatch {
         private int churn;
         /** Reel pages that were scaled up to the new Reels height. */
         private final Map<View, Boolean> scaled = new WeakHashMap<>();
+        /** Letterboxed media that was enlarged, with the pass it was last seen in. */
+        private final Map<View, Integer> enlarged = new WeakHashMap<>();
+        /** Views that stopped clipping their children: clip children, clip to outline, last pass. */
+        private final Map<ViewGroup, int[]> unclipped = new WeakHashMap<>();
+        private int pass;
 
         private WeakReference<View> lastReels = new WeakReference<>(null);
         private WeakReference<View> dumpedPage = new WeakReference<>(null);
@@ -176,6 +198,7 @@ public final class ReelsFullscreenPatch {
             }
             tabBarId = resources.getIdentifier(TAB_BAR_ID, "id", packageName);
             navigationRailId = resources.getIdentifier(NAVIGATION_RAIL_ID, "id", packageName);
+            mediaId = resources.getIdentifier(MEDIA_ID, "id", packageName);
         }
 
         @Override
@@ -390,9 +413,128 @@ public final class ReelsFullscreenPatch {
             if (pager.getChildCount() == 0 || !(pager.getChildAt(0) instanceof ViewGroup)) return;
 
             ViewGroup pages = (ViewGroup) pager.getChildAt(0);
+            pass++;
             for (int i = 0; i < pages.getChildCount(); i++) {
                 View content = findContent(pages.getChildAt(i), 0);
-                if (content instanceof ViewGroup) scale((ViewGroup) content);
+                if (!(content instanceof ViewGroup)) continue;
+                scale((ViewGroup) content);
+                if (expandMedia) enlarge((ViewGroup) content);
+            }
+            // Instagram reuses these views for other reels, anything not confirmed in this pass
+            // must not keep its changes.
+            resetEnlarged(false);
+        }
+
+        /**
+         * Photos and wide videos only use part of the tall card of a reel. They are scaled up
+         * until they reach the top and bottom or the sides of the page, whichever comes first.
+         */
+        private void enlarge(ViewGroup content) {
+            View media = mediaId == 0 ? null : content.findViewById(mediaId);
+            if (!(media instanceof ViewGroup) || media.getWidth() == 0 || media.getHeight() == 0) return;
+            View box = findLetterboxed((ViewGroup) media);
+            if (box == null) return;
+
+            // Position of the media inside the page.
+            float left = 0;
+            float top = 0;
+            View view = box;
+            while (view != content) {
+                left += view.getLeft();
+                top += view.getTop();
+                if (!(view.getParent() instanceof View)) return;
+                view = (View) view.getParent();
+            }
+
+            // The page itself can be scaled and moved, work out which part of it is on screen.
+            float pageScale = content.getScaleY();
+            if (pageScale <= 0) return;
+            float visibleWidth = content.getWidth() / pageScale;
+            float visibleHeight = content.getHeight() / pageScale;
+            float factor = Math.min(visibleWidth / box.getWidth(), visibleHeight / box.getHeight());
+            if (factor < MIN_ENLARGE) return;
+            float centerX = content.getWidth() / 2f;
+            float centerY = (content.getHeight() / 2f - content.getTranslationY()) / pageScale;
+
+            // The media grows past the card it sits in.
+            view = box;
+            while (view != content) {
+                view = (View) view.getParent();
+                unclip((ViewGroup) view);
+            }
+
+            box.setPivotX(box.getWidth() / 2f);
+            box.setPivotY(box.getHeight() / 2f);
+            box.setScaleX(factor);
+            box.setScaleY(factor);
+            box.setTranslationX(centerX - (left + box.getWidth() / 2f));
+            box.setTranslationY(centerY - (top + box.getHeight() / 2f));
+            enlarged.put(box, pass);
+        }
+
+        /** Finds the outermost view inside the card that is clearly smaller than the card. */
+        private View findLetterboxed(ViewGroup media) {
+            float width = media.getWidth();
+            float height = media.getHeight();
+
+            List<ViewGroup> level = new ArrayList<>();
+            level.add(media);
+            for (int depth = 0; depth < MAX_MEDIA_DEPTH && !level.isEmpty(); depth++) {
+                List<ViewGroup> next = new ArrayList<>();
+                for (ViewGroup group : level) {
+                    for (int i = 0; i < group.getChildCount(); i++) {
+                        View child = group.getChildAt(i);
+                        if (child.getVisibility() != View.VISIBLE) continue;
+                        int childWidth = child.getWidth();
+                        int childHeight = child.getHeight();
+                        if (childWidth * (float) childHeight < MIN_MEDIA_AREA * width * height) continue;
+
+                        if (childWidth <= LETTERBOX_RATIO * width || childHeight <= LETTERBOX_RATIO * height) {
+                            return child;
+                        }
+                        if (child instanceof ViewGroup) next.add((ViewGroup) child);
+                    }
+                }
+                level = next;
+            }
+            return null;
+        }
+
+        private void unclip(ViewGroup group) {
+            int[] original = unclipped.get(group);
+            if (original == null) {
+                original = new int[]{group.getClipChildren() ? 1 : 0, group.getClipToOutline() ? 1 : 0, pass};
+                unclipped.put(group, original);
+            }
+            original[2] = pass;
+            if (group.getClipChildren()) group.setClipChildren(false);
+            if (group.getClipToOutline()) group.setClipToOutline(false);
+        }
+
+        private void resetEnlarged(boolean all) {
+            for (Iterator<Map.Entry<View, Integer>> iterator = enlarged.entrySet().iterator(); iterator.hasNext(); ) {
+                Map.Entry<View, Integer> entry = iterator.next();
+                if (!all && entry.getValue() == pass) continue;
+                View view = entry.getKey();
+                if (view != null) {
+                    view.setScaleX(1f);
+                    view.setScaleY(1f);
+                    view.setTranslationX(0f);
+                    view.setTranslationY(0f);
+                }
+                iterator.remove();
+            }
+
+            for (Iterator<Map.Entry<ViewGroup, int[]>> iterator = unclipped.entrySet().iterator(); iterator.hasNext(); ) {
+                Map.Entry<ViewGroup, int[]> entry = iterator.next();
+                int[] original = entry.getValue();
+                if (!all && original[2] == pass) continue;
+                ViewGroup group = entry.getKey();
+                if (group != null) {
+                    group.setClipChildren(original[0] == 1);
+                    group.setClipToOutline(original[1] == 1);
+                }
+                iterator.remove();
             }
         }
 
@@ -492,6 +634,7 @@ public final class ReelsFullscreenPatch {
                 view.setTranslationY(0f);
             }
             scaled.clear();
+            resetEnlarged(true);
 
             if (addedUiFlags != 0) {
                 decor.setSystemUiVisibility(decor.getSystemUiVisibility() & ~addedUiFlags);

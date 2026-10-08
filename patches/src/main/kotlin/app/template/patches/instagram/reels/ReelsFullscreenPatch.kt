@@ -59,6 +59,24 @@ val hideTabBarInReelsPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val expandPhotosInReelsPatch = bytecodePatch(
+    name = "Expand photos in Reels",
+    description = "Enlarges photos and wide videos in Reels so they use the empty space around them.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableExpandMedia()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +
