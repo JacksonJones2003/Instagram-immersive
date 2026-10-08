@@ -1,3 +1,9 @@
+## [1.0.0-dev.9](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.8...v1.0.0-dev.9) (2026-10-08)
+
+### ✨ New Features
+
+* Add Reels progress bar on the navigation rail patch ([a334604](https://github.com/JacksonJones2003/Instagram-immersive/commit/a334604d3ad2d1c1b57967deed527263aa054f92))
+
 ## [1.0.0-dev.8](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.7...v1.0.0-dev.8) (2026-10-08)
 
 ### ✨ New Features

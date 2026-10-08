@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.0.0-dev.8",
+  "version": "1.0.0-dev.9",
   "patches": [
     {
       "name": "Expand photos in Reels",
@@ -128,6 +128,37 @@
       "name": "Reels fullscreen debug",
       "description": "Copies a description of the layout of each reel to the clipboard a few seconds after it is shown. Only needed to report layout problems.",
       "default": false,
+      "category": null,
+      "dependencies": [
+        "BytecodePatch"
+      ],
+      "compatiblePackages": [
+        {
+          "packageName": "com.instagram.android",
+          "name": "Instagram",
+          "description": null,
+          "apkFileType": "APKM",
+          "appIconColor": "#FC483C",
+          "signatures": null,
+          "targets": [
+            {
+              "version": "447.0.0.55.81",
+              "versionCodes": {
+                "ARM64_V8A": 385311895
+              },
+              "isExperimental": false,
+              "minSdk": null,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "options": []
+    },
+    {
+      "name": "Reels progress bar on the navigation rail",
+      "description": "Shows the progress bar of Reels as a vertical bar between the navigation rail and the reel on large screens.",
+      "default": true,
       "category": null,
       "dependencies": [
         "BytecodePatch"

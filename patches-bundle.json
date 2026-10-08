@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-08T06:12:25",
-  "description": "## [1.0.0-dev.8](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.7...v1.0.0-dev.8) (2026-10-08)\n\n### ✨ New Features\n\n* Hide the card border on expanded photos and add Move Reels buttons to the edge patch ([70bdc4e](https://github.com/JacksonJones2003/Instagram-immersive/commit/70bdc4ee9712526d5866716daf00b649fdb61262))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.8/patches-1.0.0-dev.8.mpp",
+  "created_at": "2026-10-08T16:21:57",
+  "description": "## [1.0.0-dev.9](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.8...v1.0.0-dev.9) (2026-10-08)\n\n### ✨ New Features\n\n* Add Reels progress bar on the navigation rail patch ([a334604](https://github.com/JacksonJones2003/Instagram-immersive/commit/a334604d3ad2d1c1b57967deed527263aa054f92))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.9/patches-1.0.0-dev.9.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.8"
+  "version": "1.0.0-dev.9"
 }
