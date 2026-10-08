@@ -11,6 +11,9 @@ import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -1336,7 +1339,11 @@ public final class ReelsFullscreenPatch {
         private final RectF bubble = new RectF();
         private final RectF next = new RectF();
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path outline = new Path();
         private final float density;
+        private Shader sheen;
+        private Shader rim;
         private boolean hasTarget;
         private boolean bubblePlaced;
         boolean light;
@@ -1385,6 +1392,15 @@ public final class ReelsFullscreenPatch {
             }
             boolean changed = !next.equals(pill);
             pill.set(next);
+            if (changed || sheen == null) {
+                // Light falls on glass from above: bright upper edge, clear middle, faint glow below.
+                sheen = new LinearGradient(0, pill.top, 0, pill.bottom,
+                        new int[]{0x47FFFFFF, 0x0DFFFFFF, 0x00FFFFFF, 0x1AFFFFFF},
+                        new float[]{0f, 0.35f, 0.7f, 1f}, Shader.TileMode.CLAMP);
+                rim = new LinearGradient(0, pill.top, 0, pill.bottom,
+                        new int[]{0xB3FFFFFF, 0x26FFFFFF, 0x66FFFFFF},
+                        new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP);
+            }
 
             boolean hadTarget = hasTarget;
             hasTarget = selected != null;
@@ -1424,34 +1440,59 @@ public final class ReelsFullscreenPatch {
             if (pill.isEmpty()) return;
             float radius = Math.min(pill.width(), pill.height()) / 2f;
 
+            // Soft shadow around the pill, kept out from under the glass itself.
+            if (floating) {
+                outline.rewind();
+                outline.addRoundRect(pill, radius, radius, Path.Direction.CW);
+                canvas.save();
+                canvas.clipOutPath(outline);
+                shadowPaint.setColor(0x01000000);
+                shadowPaint.setShadowLayer(10 * density, 0, 3 * density, 0x59000000);
+                canvas.drawRoundRect(pill, radius, radius, shadowPaint);
+                canvas.restore();
+            }
+
             boolean blurred = false;
             if (blur != null && Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated()) {
                 blurred = ((GlassBlur) blur).draw(canvas, pill, radius);
             }
 
+            // Thin tint, the blur and the highlights are what make it read as glass.
+            paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
             if (blurred) {
-                paint.setColor(light ? 0x73FFFFFF : 0x59141414);
+                paint.setColor(light ? 0x38FFFFFF : 0x2E000000);
             } else if (floating) {
-                paint.setColor(light ? 0xE6FFFFFF : 0xE61C1C1E);
+                paint.setColor(light ? 0x99FFFFFF : 0x8C1C1C1E);
             } else {
                 paint.setColor(light ? 0x14000000 : 0x1FFFFFFF);
             }
             canvas.drawRoundRect(pill, radius, radius, paint);
 
+            paint.setColor(Color.WHITE);
+            paint.setShader(sheen);
+            canvas.drawRoundRect(pill, radius, radius, paint);
+            paint.setShader(null);
+
             if (hasTarget) {
                 // Glide a part of the remaining way on every frame.
                 float moved = glide();
-                paint.setColor(light ? 0x1F000000 : 0x33FFFFFF);
                 float bubbleRadius = Math.min(bubble.width(), bubble.height()) / 2f;
+                paint.setColor(light ? 0x24000000 : 0x38FFFFFF);
+                canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(density);
+                paint.setColor(0x59FFFFFF);
                 canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
                 if (moved > 0.5f) invalidateSelf();
             }
 
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(density);
-            paint.setColor(light ? 0x66FFFFFF : 0x33FFFFFF);
+            paint.setStrokeWidth(1.25f * density);
+            paint.setColor(Color.WHITE);
+            paint.setShader(rim);
             canvas.drawRoundRect(pill, radius, radius, paint);
+            paint.setShader(null);
         }
 
         private float glide() {
@@ -1489,7 +1530,11 @@ public final class ReelsFullscreenPatch {
         private boolean recorded;
 
         GlassBlur(float radius) {
-            node.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP));
+            ColorMatrix colors = new ColorMatrix();
+            colors.setSaturation(1.8f);
+            node.setRenderEffect(RenderEffect.createChainEffect(
+                    RenderEffect.createColorFilterEffect(new ColorMatrixColorFilter(colors)),
+                    RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)));
         }
 
         void capture(View behind, float moveX, float moveY, int width, int height) {
