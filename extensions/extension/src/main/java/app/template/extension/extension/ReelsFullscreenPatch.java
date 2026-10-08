@@ -17,8 +17,6 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.Toast;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -40,6 +38,8 @@ public final class ReelsFullscreenPatch {
             "clips_viewer_fragment_container",
     };
     private static final String TAB_BAR_ID = "tab_bar";
+    // Navigation rail that replaces the tab bar on large screens.
+    private static final String NAVIGATION_RAIL_ID = "ls_vertical_nav_bar_stub";
 
     private static final int EDGE_TO_EDGE_FLAGS =
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
@@ -49,6 +49,8 @@ public final class ReelsFullscreenPatch {
     private static final String LITHO_VIEW_CLASS = "com.facebook.litho.LithoView";
     private static final int MAX_CONTENT_DEPTH = 3;
     private static final float MIN_SCALE = 1.01f;
+    // Stop adjusting when Instagram keeps putting its spacing back on every layout pass.
+    private static final int MAX_CHURN = 50;
     private static final int MAX_DUMP_DEPTH = 9;
     private static final int MAX_DUMP_LINES = 300;
     private static final long DUMP_DELAY_MS = 3000;
@@ -134,10 +136,18 @@ public final class ReelsFullscreenPatch {
         private final Activity activity;
         private final int[] reelsViewIds;
         private final int tabBarId;
+        private final int navigationRailId;
 
-        /** Undo actions for everything changed while Reels is on screen. */
-        private final List<Runnable> undo = new ArrayList<>();
-        private final Map<View, Boolean> adjusted = new WeakHashMap<>();
+        // What Instagram had set before it was changed, to put it back when Reels is left.
+        /** Left, top, right and bottom padding. */
+        private final Map<View, int[]> originalPadding = new WeakHashMap<>();
+        /** Top and bottom margin. */
+        private final Map<View, int[]> originalMargins = new WeakHashMap<>();
+        private final Map<View, Float> originalTranslation = new WeakHashMap<>();
+        private Integer originalStatusBarColor;
+        private int addedUiFlags;
+        private boolean changed;
+        private int churn;
         /** Reel pages that were scaled up to the new Reels height. */
         private final Map<View, Boolean> scaled = new WeakHashMap<>();
 
@@ -159,6 +169,7 @@ public final class ReelsFullscreenPatch {
                 reelsViewIds[i] = resources.getIdentifier(REELS_VIEW_IDS[i], "id", packageName);
             }
             tabBarId = resources.getIdentifier(TAB_BAR_ID, "id", packageName);
+            navigationRailId = resources.getIdentifier(NAVIGATION_RAIL_ID, "id", packageName);
         }
 
         @Override
@@ -197,10 +208,17 @@ public final class ReelsFullscreenPatch {
             if (!active) {
                 active = true;
                 baseHeight = reels.getHeight();
-                drawBehindStatusBar(decor);
             }
+            // Folding, unfolding and rotating make Instagram apply its spacing again,
+            // so everything is checked on every pass instead of once.
+            if (navigationRailShown(decor)) tabBarHidden = false;
+            drawBehindStatusBar(decor);
             if (hideTabBar) hideTabBar(tabBar);
-            expand(reels, decor, top, bottom);
+            if (churn <= MAX_CHURN) {
+                changed = false;
+                expand(reels, decor, top, bottom);
+                churn = changed ? churn + 1 : 0;
+            }
             fill(reels);
 
             if (!dumped && debug) {
@@ -229,23 +247,25 @@ public final class ReelsFullscreenPatch {
             return null;
         }
 
-        private void drawBehindStatusBar(View decor) {
-            final Window window = activity.getWindow();
+        private boolean navigationRailShown(View decor) {
+            View rail = navigationRailId == 0 ? null : decor.findViewById(navigationRailId);
+            return rail != null && rail.isShown() && rail.getWidth() > 0;
+        }
 
-            final int visibility = decor.getSystemUiVisibility();
-            if ((visibility & EDGE_TO_EDGE_FLAGS) != EDGE_TO_EDGE_FLAGS) {
+        private void drawBehindStatusBar(View decor) {
+            Window window = activity.getWindow();
+
+            int visibility = decor.getSystemUiVisibility();
+            int missing = EDGE_TO_EDGE_FLAGS & ~visibility;
+            if (missing != 0) {
+                addedUiFlags |= missing;
                 decor.setSystemUiVisibility(visibility | EDGE_TO_EDGE_FLAGS);
-                undo.add(() -> {
-                    View view = window.getDecorView();
-                    int missing = EDGE_TO_EDGE_FLAGS & ~visibility;
-                    view.setSystemUiVisibility(view.getSystemUiVisibility() & ~missing);
-                });
             }
 
-            final int color = window.getStatusBarColor();
+            int color = window.getStatusBarColor();
             if (color != Color.TRANSPARENT) {
+                if (originalStatusBarColor == null) originalStatusBarColor = color;
                 window.setStatusBarColor(Color.TRANSPARENT);
-                undo.add(() -> window.setStatusBarColor(color));
             }
         }
 
@@ -255,9 +275,12 @@ public final class ReelsFullscreenPatch {
             tabBarHidden = true;
         }
 
-        private void showTabBar(View tabBar) {
-            // Only undo our own change, Instagram hides the tab bar by itself at times.
-            if (tabBarHidden && tabBar != null && tabBar.getVisibility() == View.GONE) {
+        private void showTabBar(View decor) {
+            View tabBar = tabBarId == 0 ? null : decor.findViewById(tabBarId);
+            // Only revert our own change, Instagram hides the tab bar by itself at times
+            // and does not use it at all next to the navigation rail.
+            if (tabBarHidden && tabBar != null && tabBar.getVisibility() == View.GONE
+                    && !navigationRailShown(decor)) {
                 tabBar.setVisibility(View.VISIBLE);
             }
             tabBarHidden = false;
@@ -268,78 +291,93 @@ public final class ReelsFullscreenPatch {
          * that keep it clear of the status bar, the navigation bar and the tab bar.
          */
         private void expand(View reels, View decor, int top, int bottom) {
+            // Spacing Instagram keeps below the reel pages.
+            if (reels.getPaddingBottom() > 0) {
+                rememberPadding(reels, false, true);
+                reels.setPadding(reels.getPaddingLeft(), reels.getPaddingTop(), reels.getPaddingRight(), 0);
+                changed = true;
+            }
+
             View child = reels;
             while (child != decor) {
                 ViewParent viewParent = child.getParent();
                 if (!(viewParent instanceof ViewGroup)) break;
                 ViewGroup parent = (ViewGroup) viewParent;
 
-                if (!adjusted.containsKey(child)) {
-                    boolean changed = removeMargins(child, top, bottom);
-                    changed |= removePadding(parent, child, top, bottom);
-                    if (changed) adjusted.put(child, Boolean.TRUE);
-                }
+                removeMargins(child, top, bottom);
+                removePadding(parent, child, top, bottom);
                 child = parent;
             }
         }
 
-        private boolean removeMargins(final View view, int top, int bottom) {
-            if (!(view.getLayoutParams() instanceof ViewGroup.MarginLayoutParams)) return false;
-            final ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
-            final int topMargin = params.topMargin;
-            final int bottomMargin = params.bottomMargin;
+        private void rememberPadding(View view, boolean top, boolean bottom) {
+            int[] original = originalPadding.get(view);
+            if (original == null) {
+                original = new int[]{view.getPaddingLeft(), view.getPaddingTop(),
+                        view.getPaddingRight(), view.getPaddingBottom()};
+                originalPadding.put(view, original);
+                return;
+            }
+            // Instagram set this side again, its new value is the one to go back to.
+            if (top) original[1] = view.getPaddingTop();
+            if (bottom) original[3] = view.getPaddingBottom();
+        }
 
-            boolean removeTop = isTopInset(topMargin, top);
-            boolean removeBottom = isBottomInset(bottomMargin, bottom);
-            if (!removeTop && !removeBottom) return false;
+        private void removeMargins(View view, int top, int bottom) {
+            if (!(view.getLayoutParams() instanceof ViewGroup.MarginLayoutParams)) return;
+            ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
+
+            boolean removeTop = isTopInset(params.topMargin, top);
+            boolean removeBottom = isBottomInset(params.bottomMargin, bottom);
+            if (!removeTop && !removeBottom) return;
+
+            int[] original = originalMargins.get(view);
+            if (original == null) {
+                originalMargins.put(view, new int[]{params.topMargin, params.bottomMargin});
+            } else {
+                if (removeTop) original[0] = params.topMargin;
+                if (removeBottom) original[1] = params.bottomMargin;
+            }
 
             if (removeTop) params.topMargin = 0;
             if (removeBottom) params.bottomMargin = 0;
             view.setLayoutParams(params);
-
-            undo.add(() -> {
-                params.topMargin = topMargin;
-                params.bottomMargin = bottomMargin;
-                view.setLayoutParams(params);
-            });
-            return true;
+            changed = true;
         }
 
-        private boolean removePadding(final ViewGroup parent, View pathChild, int top, int bottom) {
-            final int left = parent.getPaddingLeft();
-            final int right = parent.getPaddingRight();
-            final int paddingTop = parent.getPaddingTop();
-            final int paddingBottom = parent.getPaddingBottom();
+        private void removePadding(ViewGroup parent, View pathChild, int top, int bottom) {
+            int paddingTop = parent.getPaddingTop();
+            int paddingBottom = parent.getPaddingBottom();
 
-            final int removedTop = isTopInset(paddingTop, top) ? paddingTop : 0;
-            final int removedBottom = isBottomInset(paddingBottom, bottom) ? paddingBottom : 0;
-            if (removedTop == 0 && removedBottom == 0) return false;
+            int removedTop = isTopInset(paddingTop, top) ? paddingTop : 0;
+            int removedBottom = isBottomInset(paddingBottom, bottom) ? paddingBottom : 0;
+            if (removedTop == 0 && removedBottom == 0) return;
 
-            parent.setPadding(left, paddingTop - removedTop, right, paddingBottom - removedBottom);
-            undo.add(() -> parent.setPadding(left, paddingTop, right, paddingBottom));
+            rememberPadding(parent, removedTop != 0, removedBottom != 0);
+            parent.setPadding(parent.getPaddingLeft(), paddingTop - removedTop,
+                    parent.getPaddingRight(), paddingBottom - removedBottom);
+            changed = true;
 
             // Headers and other overlays next to the Reels view keep their old position,
             // otherwise they would end up underneath the status bar clock.
             int middle = parent.getHeight() / 2;
             for (int i = 0; i < parent.getChildCount(); i++) {
-                final View sibling = parent.getChildAt(i);
-                if (sibling == pathChild) continue;
+                View sibling = parent.getChildAt(i);
+                if (sibling == pathChild || originalTranslation.containsKey(sibling)) continue;
 
                 boolean lowerHalf = sibling.getTop() + sibling.getHeight() / 2 > middle;
                 int shift = lowerHalf ? -removedBottom : removedTop;
                 if (shift == 0) continue;
 
-                final float translation = sibling.getTranslationY();
-                sibling.setTranslationY(translation + shift);
-                undo.add(() -> sibling.setTranslationY(translation));
+                originalTranslation.put(sibling, sibling.getTranslationY());
+                sibling.setTranslationY(sibling.getTranslationY() + shift);
             }
-            return true;
         }
 
         /**
          * Instagram lays out the video card and its buttons for the height that was available
          * below the status bar, so an expanded page keeps empty space at the bottom.
-         * The content of each page is scaled up until it uses the full height.
+         * The content of each page is scaled up and moved until it spans the full height.
          */
         private void fill(View reels) {
             if (!(reels instanceof ViewGroup)) return;
@@ -385,19 +423,25 @@ public final class ReelsFullscreenPatch {
             }
             if (bottom <= top) return;
 
-            // Keep the margin above the card below it as well, and never push anything off the sides.
+            // Edge to edge, but never push anything off the sides.
             float center = width / 2f;
             float reach = Math.max(center - left, right - center);
-            float scale = height / (float) (bottom + Math.max(top, 0));
+            float scale = height / (float) (bottom - top);
             if (reach > 0) scale = Math.min(scale, center / reach);
-            if (scale < MIN_SCALE) scale = 1f;
+            float translation = -top * scale;
+            if (scale < MIN_SCALE) {
+                scale = 1f;
+                translation = 0f;
+            }
 
-            if (Math.abs(content.getScaleY() - scale) < 0.001f) return;
+            if (Math.abs(content.getScaleY() - scale) < 0.001f
+                    && Math.abs(content.getTranslationY() - translation) < 0.5f) return;
             scaled.put(content, Boolean.TRUE);
             content.setPivotX(center);
             content.setPivotY(0);
             content.setScaleX(scale);
             content.setScaleY(scale);
+            content.setTranslationY(translation);
         }
 
         private boolean isTopInset(int value, int top) {
@@ -414,21 +458,52 @@ public final class ReelsFullscreenPatch {
         }
 
         private void restore(View decor) {
-            for (int i = undo.size() - 1; i >= 0; i--) {
-                undo.get(i).run();
+            for (Map.Entry<View, int[]> entry : originalPadding.entrySet()) {
+                View view = entry.getKey();
+                int[] padding = entry.getValue();
+                if (view != null) view.setPadding(padding[0], padding[1], padding[2], padding[3]);
             }
-            undo.clear();
-            adjusted.clear();
+            originalPadding.clear();
+
+            for (Map.Entry<View, int[]> entry : originalMargins.entrySet()) {
+                View view = entry.getKey();
+                if (view == null || !(view.getLayoutParams() instanceof ViewGroup.MarginLayoutParams)) continue;
+                ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
+                params.topMargin = entry.getValue()[0];
+                params.bottomMargin = entry.getValue()[1];
+                view.setLayoutParams(params);
+            }
+            originalMargins.clear();
+
+            for (Map.Entry<View, Float> entry : originalTranslation.entrySet()) {
+                if (entry.getKey() != null) entry.getKey().setTranslationY(entry.getValue());
+            }
+            originalTranslation.clear();
+
             for (View view : scaled.keySet()) {
                 if (view == null) continue;
                 view.setScaleX(1f);
                 view.setScaleY(1f);
+                view.setTranslationY(0f);
             }
             scaled.clear();
+
+            if (addedUiFlags != 0) {
+                decor.setSystemUiVisibility(decor.getSystemUiVisibility() & ~addedUiFlags);
+                addedUiFlags = 0;
+            }
+            if (originalStatusBarColor != null) {
+                activity.getWindow().setStatusBarColor(originalStatusBarColor);
+                originalStatusBarColor = null;
+            }
+
+            showTabBar(decor);
             baseHeight = 0;
-            showTabBar(tabBarId == 0 ? null : decor.findViewById(tabBarId));
+            churn = 0;
             active = false;
             dumped = false;
+            // The remembered spacing can be from before a fold or rotation, let Instagram redo it.
+            decor.requestApplyInsets();
         }
 
         /**
