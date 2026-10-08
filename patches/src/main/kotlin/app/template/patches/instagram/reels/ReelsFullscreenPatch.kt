@@ -77,6 +77,24 @@ val expandPhotosInReelsPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val moveReelsButtonsPatch = bytecodePatch(
+    name = "Move Reels buttons to the edge",
+    description = "Moves the like, comment and share buttons in Reels to the right edge of the screen.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableMoveButtons()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +

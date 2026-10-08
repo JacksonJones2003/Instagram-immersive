@@ -62,6 +62,10 @@ public final class ReelsFullscreenPatch {
     private static final float LETTERBOX_RATIO = 0.93f;
     private static final float MIN_MEDIA_AREA = 0.25f;
     private static final float MIN_ENLARGE = 1.02f;
+    // How far the card is grown past the page to get its border off screen.
+    private static final float CARD_OVERSCAN = 1.03f;
+    // Column with the like, comment and share buttons.
+    private static final String BUTTONS_ID = "clips_ufi_component";
     private static final int MAX_DUMP_DEPTH = 18;
     private static final int MAX_DUMP_LINES = 400;
     private static final long DUMP_DELAY_MS = 2500;
@@ -73,6 +77,7 @@ public final class ReelsFullscreenPatch {
     private static boolean hideTabBar;
     private static boolean debug;
     private static boolean expandMedia;
+    private static boolean moveButtons;
 
     private ReelsFullscreenPatch() {
     }
@@ -85,6 +90,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Expand photos in Reels" patch. */
     public static void enableExpandMedia() {
         expandMedia = true;
+    }
+
+    /** Injection point. Added by the "Move Reels buttons to the edge" patch. */
+    public static void enableMoveButtons() {
+        moveButtons = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -160,6 +170,7 @@ public final class ReelsFullscreenPatch {
         private final int tabBarId;
         private final int navigationRailId;
         private final int mediaId;
+        private final int buttonsId;
 
         // What Instagram had set before it was changed, to put it back when Reels is left.
         /** Left, top, right and bottom padding. */
@@ -173,10 +184,8 @@ public final class ReelsFullscreenPatch {
         private int churn;
         /** Reel pages that were scaled up to the new Reels height. */
         private final Map<View, Boolean> scaled = new WeakHashMap<>();
-        /** Letterboxed media that was enlarged, with the pass it was last seen in. */
+        /** Views inside a page that were scaled or moved, with the pass they were last seen in. */
         private final Map<View, Integer> enlarged = new WeakHashMap<>();
-        /** Views that stopped clipping their children: clip children, clip to outline, last pass. */
-        private final Map<ViewGroup, int[]> unclipped = new WeakHashMap<>();
         private int pass;
 
         private WeakReference<View> lastReels = new WeakReference<>(null);
@@ -199,6 +208,7 @@ public final class ReelsFullscreenPatch {
             tabBarId = resources.getIdentifier(TAB_BAR_ID, "id", packageName);
             navigationRailId = resources.getIdentifier(NAVIGATION_RAIL_ID, "id", packageName);
             mediaId = resources.getIdentifier(MEDIA_ID, "id", packageName);
+            buttonsId = resources.getIdentifier(BUTTONS_ID, "id", packageName);
         }
 
         @Override
@@ -419,29 +429,49 @@ public final class ReelsFullscreenPatch {
                 if (!(content instanceof ViewGroup)) continue;
                 scale((ViewGroup) content);
                 if (expandMedia) enlarge((ViewGroup) content);
+                if (moveButtons) moveButtons((ViewGroup) content);
             }
             // Instagram reuses these views for other reels, anything not confirmed in this pass
             // must not keep its changes.
             resetEnlarged(false);
         }
 
+        /** The card of a page is the child that holds its video or photo. */
+        private View findCard(ViewGroup content) {
+            View media = mediaId == 0 ? null : content.findViewById(mediaId);
+            return media == null ? null : childContaining(content, media);
+        }
+
+        private View childContaining(ViewGroup group, View descendant) {
+            View view = descendant;
+            while (view != null && view.getParent() != group) {
+                view = view.getParent() instanceof View ? (View) view.getParent() : null;
+            }
+            return view;
+        }
+
         /**
          * Photos and wide videos only use part of the tall card of a reel. They are scaled up
          * until they reach the top and bottom or the sides of the page, whichever comes first.
+         *
+         * The card draws its border over everything inside it, so the card as a whole is grown
+         * until that border is off screen and its contents are sized back down inside it.
          */
         private void enlarge(ViewGroup content) {
-            View media = mediaId == 0 ? null : content.findViewById(mediaId);
+            View card = findCard(content);
+            if (!(card instanceof ViewGroup) || card.getWidth() == 0 || card.getHeight() == 0) return;
+            View media = content.findViewById(mediaId);
             if (!(media instanceof ViewGroup) || media.getWidth() == 0 || media.getHeight() == 0) return;
             View box = findLetterboxed((ViewGroup) media);
             if (box == null) return;
 
-            // Position of the media inside the page.
-            float left = 0;
-            float top = 0;
+            // Center of the media inside the card.
+            float boxX = box.getWidth() / 2f;
+            float boxY = box.getHeight() / 2f;
             View view = box;
-            while (view != content) {
-                left += view.getLeft();
-                top += view.getTop();
+            while (view != card) {
+                boxX += view.getLeft();
+                boxY += view.getTop();
                 if (!(view.getParent() instanceof View)) return;
                 view = (View) view.getParent();
             }
@@ -456,20 +486,49 @@ public final class ReelsFullscreenPatch {
             float centerX = content.getWidth() / 2f;
             float centerY = (content.getHeight() / 2f - content.getTranslationY()) / pageScale;
 
-            // The media grows past the card it sits in.
-            view = box;
-            while (view != content) {
-                view = (View) view.getParent();
-                unclip((ViewGroup) view);
-            }
+            float cardScale = CARD_OVERSCAN
+                    * Math.max(visibleWidth / card.getWidth(), visibleHeight / card.getHeight());
+            float cardX = card.getWidth() / 2f;
+            float cardY = card.getHeight() / 2f;
+            float moveX = centerX - (card.getLeft() + cardX);
+            float moveY = centerY - (card.getTop() + cardY);
+            transform(card, cardX, cardY, cardScale, moveX, moveY);
+            transform(box, box.getWidth() / 2f, box.getHeight() / 2f, factor / cardScale,
+                    cardX - boxX, cardY - boxY);
 
-            box.setPivotX(box.getWidth() / 2f);
-            box.setPivotY(box.getHeight() / 2f);
-            box.setScaleX(factor);
-            box.setScaleY(factor);
-            box.setTranslationX(centerX - (left + box.getWidth() / 2f));
-            box.setTranslationY(centerY - (top + box.getHeight() / 2f));
-            enlarged.put(box, pass);
+            // The caption and everything else on top of the media keeps its size and place.
+            ViewGroup cardGroup = (ViewGroup) card;
+            View mediaBranch = childContaining(cardGroup, box);
+            for (int i = 0; i < cardGroup.getChildCount(); i++) {
+                View child = cardGroup.getChildAt(i);
+                if (child == mediaBranch) continue;
+                transform(child, cardX - child.getLeft(), cardY - child.getTop(), 1f / cardScale,
+                        -moveX / cardScale, -moveY / cardScale);
+            }
+        }
+
+        /** Moves the like, comment and share buttons to the right edge of the page. */
+        private void moveButtons(ViewGroup content) {
+            View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
+            if (buttons == null || buttons.getParent() != content) return;
+            float pageScale = content.getScaleY();
+            if (pageScale <= 0) return;
+
+            float visibleRight = content.getWidth() / 2f + content.getWidth() / (2f * pageScale);
+            float shift = visibleRight - buttons.getRight();
+            if (shift <= 0) return;
+            buttons.setTranslationX(shift);
+            enlarged.put(buttons, pass);
+        }
+
+        private void transform(View view, float pivotX, float pivotY, float scale, float moveX, float moveY) {
+            view.setPivotX(pivotX);
+            view.setPivotY(pivotY);
+            view.setScaleX(scale);
+            view.setScaleY(scale);
+            view.setTranslationX(moveX);
+            view.setTranslationY(moveY);
+            enlarged.put(view, pass);
         }
 
         /** Finds the outermost view inside the card that is clearly smaller than the card. */
@@ -500,17 +559,6 @@ public final class ReelsFullscreenPatch {
             return null;
         }
 
-        private void unclip(ViewGroup group) {
-            int[] original = unclipped.get(group);
-            if (original == null) {
-                original = new int[]{group.getClipChildren() ? 1 : 0, group.getClipToOutline() ? 1 : 0, pass};
-                unclipped.put(group, original);
-            }
-            original[2] = pass;
-            if (group.getClipChildren()) group.setClipChildren(false);
-            if (group.getClipToOutline()) group.setClipToOutline(false);
-        }
-
         private void resetEnlarged(boolean all) {
             for (Iterator<Map.Entry<View, Integer>> iterator = enlarged.entrySet().iterator(); iterator.hasNext(); ) {
                 Map.Entry<View, Integer> entry = iterator.next();
@@ -521,18 +569,6 @@ public final class ReelsFullscreenPatch {
                     view.setScaleY(1f);
                     view.setTranslationX(0f);
                     view.setTranslationY(0f);
-                }
-                iterator.remove();
-            }
-
-            for (Iterator<Map.Entry<ViewGroup, int[]>> iterator = unclipped.entrySet().iterator(); iterator.hasNext(); ) {
-                Map.Entry<ViewGroup, int[]> entry = iterator.next();
-                int[] original = entry.getValue();
-                if (!all && original[2] == pass) continue;
-                ViewGroup group = entry.getKey();
-                if (group != null) {
-                    group.setClipChildren(original[0] == 1);
-                    group.setClipToOutline(original[1] == 1);
                 }
                 iterator.remove();
             }
@@ -569,6 +605,12 @@ public final class ReelsFullscreenPatch {
                 bottom = Math.max(bottom, child.getBottom());
             }
             if (bottom <= top) return;
+            // Instagram reserves room below the card at times, only the card has to fit.
+            View card = findCard(content);
+            if (card != null && card.getHeight() > 0) {
+                top = card.getTop();
+                bottom = card.getBottom();
+            }
 
             // Edge to edge, but never push anything off the sides.
             float center = width / 2f;
