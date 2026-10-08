@@ -1,3 +1,9 @@
+## [1.0.0-dev.12](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.11...v1.0.0-dev.12) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Describe the tab bar and navigation rail in the layout debug output ([85472e3](https://github.com/JacksonJones2003/Instagram-immersive/commit/85472e3f14963154463d9ea9894b7bbbc1efabda))
+
 ## [1.0.0-dev.11](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.10...v1.0.0-dev.11) (2026-10-08)
 
 ### 🐛 Bug Fixes
