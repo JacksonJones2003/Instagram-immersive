@@ -114,6 +114,24 @@ val reelsProgressBarOnRailPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val restartButtonOnRailPatch = bytecodePatch(
+    name = "Restart button on the navigation rail",
+    description = "Adds a button that restarts Instagram to the bottom of the navigation rail on large screens.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableRestartButton()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +

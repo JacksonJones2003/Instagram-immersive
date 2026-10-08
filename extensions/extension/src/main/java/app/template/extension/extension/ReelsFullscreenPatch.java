@@ -5,10 +5,12 @@ import android.app.Application;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.util.Log;
@@ -78,6 +80,12 @@ public final class ReelsFullscreenPatch {
     private static final long DUMP_DELAY_MS = 2500;
     // Stop adjusting when Instagram keeps putting its spacing back on every layout pass.
     private static final int MAX_CHURN = 50;
+    // Frames in a row that may be skipped to keep a frame with Instagram's spacing off screen.
+    private static final int MAX_SKIPPED_FRAMES = 3;
+    // Passes between two searches for a navigation rail that has not been found.
+    private static final int RAIL_SEARCH_INTERVAL = 30;
+    private static final int RESTART_BUTTON_SIZE_DP = 48;
+    private static final int RESTART_BUTTON_MARGIN_DP = 12;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
     private static boolean registered;
@@ -86,6 +94,7 @@ public final class ReelsFullscreenPatch {
     private static boolean expandMedia;
     private static boolean moveButtons;
     private static boolean seamScrubber;
+    private static boolean restartButton;
 
     private ReelsFullscreenPatch() {
     }
@@ -108,6 +117,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Reels progress bar on the navigation rail" patch. */
     public static void enableSeamScrubber() {
         seamScrubber = true;
+    }
+
+    /** Injection point. Added by the "Restart button on the navigation rail" patch. */
+    public static void enableRestartButton() {
+        restartButton = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -203,6 +217,11 @@ public final class ReelsFullscreenPatch {
         /** Progress bars that were made invisible, with the pass they were last seen in. */
         private final Map<View, Integer> faded = new WeakHashMap<>();
         private SeamBar seamBar;
+        private RestartButton restartView;
+        private WeakReference<View> lastRail = new WeakReference<>(null);
+        private int railSearches;
+        private boolean layoutChanged;
+        private int skippedFrames;
         private boolean railShown;
         private int pass;
 
@@ -235,7 +254,14 @@ public final class ReelsFullscreenPatch {
             // Reel pages fill in their content without a layout pass, and Instagram puts its
             // spacing back at times, so one layout callback is not enough to catch everything.
             onGlobalLayout();
-            return true;
+
+            // Instagram puts its status bar spacing back when comments close, among others.
+            // Taking it out again needs a new layout, drawing now would show one frame of the
+            // whole screen shifted down. That frame is skipped instead.
+            boolean skip = layoutChanged && skippedFrames < MAX_SKIPPED_FRAMES;
+            layoutChanged = false;
+            skippedFrames = skip ? skippedFrames + 1 : 0;
+            return !skip;
         }
 
         @Override
@@ -254,6 +280,7 @@ public final class ReelsFullscreenPatch {
 
         private void update() {
             View decor = activity.getWindow().getDecorView();
+            if (restartButton) updateRestartButton(decor);
             View reels = findReelsView(decor);
 
             if (reels == null) {
@@ -282,6 +309,7 @@ public final class ReelsFullscreenPatch {
                 changed = false;
                 expand(reels, decor, top, bottom);
                 churn = changed ? churn + 1 : 0;
+                if (changed) layoutChanged = true;
             }
             railShown = seamScrubber && navigationRailShown(decor);
             fill(reels);
@@ -306,9 +334,68 @@ public final class ReelsFullscreenPatch {
             return null;
         }
 
+        private View findNavigationRail(View decor) {
+            View rail = lastRail.get();
+            if (rail != null && rail.isAttachedToWindow()) return rail;
+            // This runs for every frame on every screen, do not search the whole window each time.
+            if (navigationRailId == 0 || railSearches++ % RAIL_SEARCH_INTERVAL != 0) return null;
+            rail = decor.findViewById(navigationRailId);
+            lastRail = new WeakReference<>(rail);
+            return rail;
+        }
+
         private boolean navigationRailShown(View decor) {
-            View rail = navigationRailId == 0 ? null : decor.findViewById(navigationRailId);
+            View rail = findNavigationRail(decor);
             return rail != null && rail.isShown() && rail.getWidth() > 0;
+        }
+
+        /** Keeps a button that restarts Instagram at the bottom of the navigation rail. */
+        private void updateRestartButton(View decor) {
+            View rail = findNavigationRail(decor);
+            View root = decor.findViewById(android.R.id.content);
+            if (rail == null || !rail.isShown() || rail.getWidth() == 0 || !(root instanceof ViewGroup)) {
+                if (restartView != null && restartView.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) restartView.getParent()).removeView(restartView);
+                }
+                return;
+            }
+
+            float density = activity.getResources().getDisplayMetrics().density;
+            int size = Math.round(RESTART_BUTTON_SIZE_DP * density);
+            if (restartView == null) {
+                restartView = new RestartButton(activity);
+                restartView.setOnClickListener(view -> restart());
+            }
+            if (restartView.getParent() != root) {
+                if (restartView.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) restartView.getParent()).removeView(restartView);
+                }
+                ((ViewGroup) root).addView(restartView, new ViewGroup.LayoutParams(size, size));
+            }
+
+            WindowInsets insets = decor.getRootWindowInsets();
+            int bottom = insets == null ? 0 : insets.getStableInsetBottom();
+            int[] railLocation = new int[2];
+            int[] rootLocation = new int[2];
+            rail.getLocationInWindow(railLocation);
+            root.getLocationInWindow(rootLocation);
+            restartView.setTranslationX(railLocation[0] - rootLocation[0] + (rail.getWidth() - size) / 2f);
+            restartView.setTranslationY(railLocation[1] - rootLocation[1] + rail.getHeight()
+                    - bottom - size - RESTART_BUTTON_MARGIN_DP * density);
+        }
+
+        private void restart() {
+            try {
+                Context context = activity.getApplicationContext();
+                Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+                if (launch == null || launch.getComponent() == null) return;
+                Intent intent = Intent.makeRestartActivityTask(launch.getComponent());
+                intent.setPackage(context.getPackageName());
+                context.startActivity(intent);
+                System.exit(0);
+            } catch (Exception e) {
+                Log.e(TAG, "restart failure", e);
+            }
         }
 
         private void drawBehindStatusBar(View decor) {
@@ -953,6 +1040,43 @@ public final class ReelsFullscreenPatch {
                 forwarded.recycle();
             }
             return true;
+        }
+    }
+
+    /** Round arrow drawn in the style of the icons of the navigation rail. */
+    private static final class RestartButton extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF circle = new RectF();
+        private final float density;
+
+        RestartButton(Context context) {
+            super(context);
+            density = context.getResources().getDisplayMetrics().density;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(2 * density);
+            paint.setColor(Color.WHITE);
+            setContentDescription("Restart Instagram");
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float centerX = getWidth() / 2f;
+            float centerY = getHeight() / 2f;
+            float radius = 9 * density;
+            circle.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+            // Open circle that ends in an arrow head on the right.
+            canvas.drawArc(circle, 30, 300, false, paint);
+
+            double end = Math.toRadians(330);
+            float endX = centerX + radius * (float) Math.cos(end);
+            float endY = centerY + radius * (float) Math.sin(end);
+            double direction = Math.atan2(Math.cos(end), -Math.sin(end));
+            for (int side = -1; side <= 1; side += 2) {
+                double angle = direction + side * Math.toRadians(150);
+                canvas.drawLine(endX, endY, endX + 5 * density * (float) Math.cos(angle),
+                        endY + 5 * density * (float) Math.sin(angle), paint);
+            }
         }
     }
 }
