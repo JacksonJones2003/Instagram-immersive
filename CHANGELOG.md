@@ -1,3 +1,9 @@
+## [1.0.0-dev.10](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.9...v1.0.0-dev.10) (2026-10-08)
+
+### ✨ New Features
+
+* Add restart button on the navigation rail and skip the shifted frame when comments close ([259c582](https://github.com/JacksonJones2003/Instagram-immersive/commit/259c582a54b36a4d9a1e76e99ab815d6604268fd))
+
 ## [1.0.0-dev.9](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.8...v1.0.0-dev.9) (2026-10-08)
 
 ### ✨ New Features

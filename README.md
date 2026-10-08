@@ -15,9 +15,9 @@ Click here to add these patches to Morphe: https://morphe.software/add-source?gi
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.0.0-dev.9](https://github.com/JacksonJones2003/Instagram-immersive/releases/tag/v1.0.0-dev.9)**&nbsp;&nbsp;•&nbsp;&nbsp;`dev`&nbsp;&nbsp;•&nbsp;&nbsp;6 patches total
+> **[v1.0.0-dev.10](https://github.com/JacksonJones2003/Instagram-immersive/releases/tag/v1.0.0-dev.10)**&nbsp;&nbsp;•&nbsp;&nbsp;`dev`&nbsp;&nbsp;•&nbsp;&nbsp;7 patches total
 <details open>
-<summary>📦 Instagram&nbsp;&nbsp;•&nbsp;&nbsp;6 patches</summary>
+<summary>📦 Instagram&nbsp;&nbsp;•&nbsp;&nbsp;7 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -33,6 +33,7 @@ Click here to add these patches to Morphe: https://morphe.software/add-source?gi
 | [Reels fullscreen](#reels-fullscreen) | Extends Reels behind the status bar and to the bottom of the screen. |  |
 | [Reels fullscreen debug](#reels-fullscreen-debug) | Copies a description of the layout of each reel to the clipboard a few seconds after it is shown. Only needed to report layout problems. |  |
 | [Reels progress bar on the navigation rail](#reels-progress-bar-on-the-navigation-rail) | Shows the progress bar of Reels as a vertical bar between the navigation rail and the reel on large screens. |  |
+| [Restart button on the navigation rail](#restart-button-on-the-navigation-rail) | Adds a button that restarts Instagram to the bottom of the navigation rail on large screens. |  |
 
 </details>
 
