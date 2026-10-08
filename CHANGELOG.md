@@ -1,3 +1,9 @@
+## [1.0.0-dev.16](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.15...v1.0.0-dev.16) (2026-10-08)
+
+### ✨ New Features
+
+* Slide over the glass tab bar, taller pill and no line above it ([4f294e7](https://github.com/JacksonJones2003/Instagram-immersive/commit/4f294e7aff41425ddd66506b47af0bd93b0b80d4))
+
 ## [1.0.0-dev.15](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.14...v1.0.0-dev.15) (2026-10-08)
 
 ### ✨ New Features
