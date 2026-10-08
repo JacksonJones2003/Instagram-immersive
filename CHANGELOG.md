@@ -1,3 +1,9 @@
+## [1.0.0-dev.7](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.6...v1.0.0-dev.7) (2026-10-08)
+
+### ✨ New Features
+
+* Add Expand photos in Reels patch ([7ff5f7d](https://github.com/JacksonJones2003/Instagram-immersive/commit/7ff5f7d98dd260adb3cf014deb22bd9c5c262569))
+
 ## [1.0.0-dev.6](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.5...v1.0.0-dev.6) (2026-10-08)
 
 ### ✨ New Features
