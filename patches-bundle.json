@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-08T05:16:45",
-  "description": "## [1.0.0-dev.2](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-10-08)\n\n### 🐛 Bug Fixes\n\n* Resize Reels video card after expanding and add layout debug patch ([aac9f14](https://github.com/JacksonJones2003/Instagram-immersive/commit/aac9f1403363f3f3d1226dafa5fa024ec6f0ddb7))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.2/patches-1.0.0-dev.2.mpp",
+  "created_at": "2026-10-08T05:23:33",
+  "description": "## [1.0.0-dev.3](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-10-08)\n\n### 🐛 Bug Fixes\n\n* Scale Reels page content to use the full height ([87616dd](https://github.com/JacksonJones2003/Instagram-immersive/commit/87616dd15a03bbc0d71bf9be9d1df823bf2b5c4c))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.3/patches-1.0.0-dev.3.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.2"
+  "version": "1.0.0-dev.3"
 }
