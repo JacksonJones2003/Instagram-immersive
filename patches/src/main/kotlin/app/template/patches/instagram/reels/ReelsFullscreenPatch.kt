@@ -151,6 +151,25 @@ val liquidGlassNavigationBarPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val replaceCreateWithMessagesPatch = bytecodePatch(
+    name = "Replace create button with messages",
+    description = "Replaces the create button of the tab bar with a messages button " +
+        "and removes it from the navigation rail on large screens.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableMessagesTab()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +

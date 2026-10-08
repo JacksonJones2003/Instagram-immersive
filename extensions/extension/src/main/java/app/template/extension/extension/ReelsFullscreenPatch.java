@@ -23,6 +23,7 @@ import android.graphics.RenderNode;
 import android.graphics.Shader;
 import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
+import android.net.Uri;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -103,6 +104,7 @@ public final class ReelsFullscreenPatch {
     private static final int MAX_BUTTONS_DEPTH = 4;
     private static final int MIN_BUTTONS = 3;
     private static final int GLASS_BLUR_DP = 20;
+    private static final String MESSAGES_LINK = "instagram://direct-inbox";
     private static final int RESTART_BUTTON_MARGIN_DP = 12;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
@@ -114,6 +116,7 @@ public final class ReelsFullscreenPatch {
     private static boolean seamScrubber;
     private static boolean restartButton;
     private static boolean glassBar;
+    private static boolean messagesTab;
 
     private ReelsFullscreenPatch() {
     }
@@ -146,6 +149,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Liquid glass navigation bar" patch. */
     public static void enableGlassBar() {
         glassBar = true;
+    }
+
+    /** Injection point. Added by the "Replace create button with messages" patch. */
+    public static void enableMessagesTab() {
+        messagesTab = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -244,6 +252,7 @@ public final class ReelsFullscreenPatch {
         private SeamBar seamBar;
         private RestartButton restartView;
         private GlassBar tabGlass;
+        private MessagesButton messagesView;
         private GlassBar railGlass;
         private WeakReference<View> lastTabBar = new WeakReference<>(null);
         private WeakReference<View> lastContent = new WeakReference<>(null);
@@ -318,6 +327,7 @@ public final class ReelsFullscreenPatch {
         private void update() {
             View decor = activity.getWindow().getDecorView();
             if (restartButton) updateRestartButton(decor);
+            if (messagesTab) updateMessagesTab(decor);
             if (glassBar) updateGlass(decor);
             View reels = findReelsView(decor);
 
@@ -401,21 +411,21 @@ public final class ReelsFullscreenPatch {
         private void updateGlass(View decor) {
             floatLift = 0;
             try {
-                View tabBar = lookup(decor, tabBarId, lastTabBar);
-                if (tabBar != null && tabBar != lastTabBar.get()) lastTabBar = new WeakReference<>(tabBar);
+                View tabBar = findTabBar(decor);
+                View content = lookup(decor, contentId, lastContent);
+                if (content != null && content != lastContent.get()) lastContent = new WeakReference<>(content);
                 if (tabBar != null && tabBar.isShown() && tabBar.getWidth() > 0 && tabBar.getHeight() > 0) {
-                    View content = lookup(decor, contentId, lastContent);
-                    if (content != null && content != lastContent.get()) lastContent = new WeakReference<>(content);
                     if (tabGlass == null) tabGlass = new GlassBar(activity);
                     floatContent(content, tabBar, decor);
-                    styleBar(tabGlass, tabBar, tabGlass.floating ? content : null);
+                    styleBar(tabGlass, tabBar, tabGlass.floating ? content : null, false);
                     if (tabGlass.floating) floatLift = tabBar.getHeight();
                 }
 
+                // Nothing runs underneath the rail, its glass shows the colors of the screen next to it.
                 View rail = findNavigationRail(decor);
                 if (rail != null && rail.isShown() && rail.getWidth() > 0) {
                     if (railGlass == null) railGlass = new GlassBar(activity);
-                    styleBar(railGlass, rail, null);
+                    styleBar(railGlass, rail, content, true);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "glass failure", e);
@@ -441,7 +451,106 @@ public final class ReelsFullscreenPatch {
             tabGlass.floating = floated.get() == content && params.bottomMargin == 0;
         }
 
-        private void styleBar(GlassBar glass, View bar, View behind) {
+        private View findTabBar(View decor) {
+            View tabBar = lookup(decor, tabBarId, lastTabBar);
+            if (tabBar != null && tabBar != lastTabBar.get()) lastTabBar = new WeakReference<>(tabBar);
+            return tabBar;
+        }
+
+        /** Name of the id of a view, bars name their buttons after what they open. */
+        private String idName(View view) {
+            if (view.getId() == View.NO_ID) return "";
+            try {
+                return activity.getResources().getResourceEntryName(view.getId());
+            } catch (Resources.NotFoundException e) {
+                return "";
+            }
+        }
+
+        private View findCreateButton(ViewGroup buttons, boolean orMiddle) {
+            List<View> shown = new ArrayList<>();
+            for (int i = 0; i < buttons.getChildCount(); i++) {
+                View child = buttons.getChildAt(i);
+                String name = idName(child);
+                if (name.contains("creation") || name.contains("create")) return child;
+                if (child.getVisibility() == View.VISIBLE && child.getWidth() > 0) shown.add(child);
+            }
+            // The tab bar has it in the middle.
+            return orMiddle && shown.size() % 2 == 1 ? shown.get(shown.size() / 2) : null;
+        }
+
+        /**
+         * The tab bar gets a messages button in place of its create button. The navigation rail
+         * already has a messages button, its create button is only removed.
+         */
+        private void updateMessagesTab(View decor) {
+            try {
+                View rail = findNavigationRail(decor);
+                if (rail != null && rail.isShown()) {
+                    ViewGroup buttons = findButtons(rail);
+                    View create = buttons == null ? null : findCreateButton(buttons, false);
+                    if (create != null && create.getVisibility() != View.GONE) {
+                        create.setVisibility(View.GONE);
+                        layoutChanged = true;
+                    }
+                }
+
+                View tabBar = findTabBar(decor);
+                ViewGroup buttons = tabBar != null && tabBar.isShown() ? findButtons(tabBar) : null;
+                View create = buttons == null ? null : findCreateButton(buttons, true);
+                if (create == null || !(tabBar.getParent() instanceof ViewGroup)) {
+                    if (messagesView != null) messagesView.setVisibility(View.GONE);
+                    return;
+                }
+                ViewGroup parent = (ViewGroup) tabBar.getParent();
+
+                // Instagram's button stays where it is, unseen, so the other buttons keep their places.
+                create.setAlpha(0f);
+                if (messagesView == null) {
+                    messagesView = new MessagesButton(activity);
+                    messagesView.setOnClickListener(view -> openMessages());
+                }
+                if (messagesView.getParent() != parent) {
+                    if (messagesView.getParent() instanceof ViewGroup) {
+                        ((ViewGroup) messagesView.getParent()).removeView(messagesView);
+                    }
+                    parent.addView(messagesView, new ViewGroup.LayoutParams(create.getWidth(), create.getHeight()));
+                }
+                ViewGroup.LayoutParams params = messagesView.getLayoutParams();
+                if (params.width != create.getWidth() || params.height != create.getHeight()) {
+                    params.width = create.getWidth();
+                    params.height = create.getHeight();
+                    messagesView.setLayoutParams(params);
+                }
+                float left = 0;
+                float top = 0;
+                for (View view = create; view != parent; view = (View) view.getParent()) {
+                    left += view.getLeft();
+                    top += view.getTop();
+                }
+                messagesView.setTranslationX(left);
+                messagesView.setTranslationY(top);
+                messagesView.setVisibility(View.VISIBLE);
+
+                boolean night = (activity.getResources().getConfiguration().uiMode
+                        & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+                messagesView.setLight(tabGlass != null ? tabGlass.light : !night);
+            } catch (Exception e) {
+                Log.e(TAG, "messages button failure", e);
+            }
+        }
+
+        private void openMessages() {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(MESSAGES_LINK));
+                intent.setPackage(activity.getPackageName());
+                activity.startActivity(intent);
+            } catch (Exception e) {
+                Log.e(TAG, "open messages failure", e);
+            }
+        }
+
+        private void styleBar(GlassBar glass, View bar, View behind, boolean ambient) {
             Drawable background = bar.getBackground();
             if (background != glass) {
                 // Instagram switches between a light and a dark bar, keep following that.
@@ -480,10 +589,13 @@ public final class ReelsFullscreenPatch {
                 int[] behindLocation = new int[2];
                 bar.getLocationInWindow(barLocation);
                 behind.getLocationInWindow(behindLocation);
+                // Next to the screen instead of over it: its whole width is squeezed into the pill,
+                // every row of the pill takes its colors from the row of the screen beside it.
+                float squeeze = ambient && behind.getWidth() > 0 ? glass.pill.width() / behind.getWidth() : 1f;
                 ((GlassBlur) glass.blur).capture(behind,
-                        behindLocation[0] - barLocation[0] - glass.pill.left,
+                        ambient ? 0 : behindLocation[0] - barLocation[0] - glass.pill.left,
                         behindLocation[1] - barLocation[1] - glass.pill.top,
-                        Math.round(glass.pill.width()), Math.round(glass.pill.height()));
+                        Math.round(glass.pill.width()), Math.round(glass.pill.height()), squeeze);
             } catch (Throwable e) {
                 // Not every device or view can be recorded like this, go without blur then.
                 Log.e(TAG, "blur failure", e);
@@ -1537,12 +1649,13 @@ public final class ReelsFullscreenPatch {
                     RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)));
         }
 
-        void capture(View behind, float moveX, float moveY, int width, int height) {
+        void capture(View behind, float moveX, float moveY, int width, int height, float squeeze) {
             if (width <= 0 || height <= 0) return;
             node.setPosition(0, 0, width, height);
             RecordingCanvas canvas = node.beginRecording(width, height);
             try {
                 canvas.translate(moveX, moveY);
+                if (squeeze != 1f) canvas.scale(squeeze, 1f);
                 behind.draw(canvas);
             } finally {
                 node.endRecording();
@@ -1560,6 +1673,51 @@ public final class ReelsFullscreenPatch {
             canvas.drawRenderNode(node);
             canvas.restore();
             return true;
+        }
+    }
+
+    /** Messages icon that takes the place of the create button of the tab bar. */
+    private static final class MessagesButton extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path icon = new Path();
+        private final float density;
+        private boolean light;
+
+        MessagesButton(Context context) {
+            super(context);
+            density = context.getResources().getDisplayMetrics().density;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(Color.WHITE);
+            setContentDescription("Messages");
+
+            // Paper plane on a 24 by 24 grid.
+            icon.moveTo(11.698f, 20.334f);
+            icon.lineTo(22f, 3.001f);
+            icon.lineTo(2f, 3.001f);
+            icon.lineTo(9.218f, 10.084f);
+            icon.close();
+            icon.moveTo(22f, 3f);
+            icon.lineTo(9.218f, 10.083f);
+        }
+
+        void setLight(boolean light) {
+            if (this.light == light) return;
+            this.light = light;
+            paint.setColor(light ? Color.BLACK : Color.WHITE);
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float size = 24 * density;
+            canvas.save();
+            canvas.translate((getWidth() - size) / 2f, (getHeight() - size) / 2f);
+            canvas.scale(density, density);
+            paint.setStrokeWidth(2f);
+            canvas.drawPath(icon, paint);
+            canvas.restore();
         }
     }
 }
