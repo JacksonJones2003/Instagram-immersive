@@ -1,3 +1,9 @@
+## [1.0.0-dev.13](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.12...v1.0.0-dev.13) (2026-10-08)
+
+### ✨ New Features
+
+* Add Liquid glass navigation bar patch ([566d626](https://github.com/JacksonJones2003/Instagram-immersive/commit/566d62658090dce6aa7722758bff3dc934bcde22))
+
 ## [1.0.0-dev.12](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.11...v1.0.0-dev.12) (2026-10-08)
 
 ### 🐛 Bug Fixes
