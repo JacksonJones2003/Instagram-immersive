@@ -1,3 +1,9 @@
+## [1.0.0-dev.4](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Keep Reels fullscreen after folding and fill edge to edge ([3cd7ac2](https://github.com/JacksonJones2003/Instagram-immersive/commit/3cd7ac2985cb2eff735f0541a511bd73042af981))
+
 ## [1.0.0-dev.3](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-10-08)
 
 ### 🐛 Bug Fixes
