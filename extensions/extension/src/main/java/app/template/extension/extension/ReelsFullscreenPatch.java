@@ -2,6 +2,8 @@ package app.template.extension.extension;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
@@ -13,6 +15,7 @@ import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,10 +45,16 @@ public final class ReelsFullscreenPatch {
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
     // Insets are whole pixels, allow for rounding done by Instagram.
     private static final int TOLERANCE_PX = 2;
+    // How far below the Reels view fixed sizes are looked for.
+    private static final int MAX_GROW_DEPTH = 6;
+    private static final int MAX_DUMP_DEPTH = 9;
+    private static final int MAX_DUMP_LINES = 300;
+    private static final long DUMP_DELAY_MS = 3000;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
     private static boolean registered;
     private static boolean hideTabBar;
+    private static boolean debug;
 
     private ReelsFullscreenPatch() {
     }
@@ -53,6 +62,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Hide tab bar in Reels" patch. */
     public static void enableHideTabBar() {
         hideTabBar = true;
+    }
+
+    /** Injection point. Added by the "Reels fullscreen debug" patch. */
+    public static void enableDebug() {
+        debug = true;
     }
 
     /** Injection point. Called from the application's onCreate. */
@@ -122,12 +136,16 @@ public final class ReelsFullscreenPatch {
         /** Undo actions for everything changed while Reels is on screen. */
         private final List<Runnable> undo = new ArrayList<>();
         private final Map<View, Boolean> adjusted = new WeakHashMap<>();
+        /** Original layout width and height of views that were grown to the new Reels height. */
+        private final Map<View, int[]> grown = new WeakHashMap<>();
 
         private boolean applying;
         private boolean active;
         private boolean dumped;
         private boolean tabBarHidden;
         private int tabBarHeight;
+        /** Height of the Reels view before it was expanded. */
+        private int baseHeight;
 
         State(Activity activity) {
             this.activity = activity;
@@ -176,14 +194,27 @@ public final class ReelsFullscreenPatch {
 
             if (!active) {
                 active = true;
+                baseHeight = reels.getHeight();
                 drawBehindStatusBar(decor);
             }
             if (hideTabBar) hideTabBar(tabBar);
             expand(reels, decor, top, bottom);
+            grow(reels);
 
-            if (!dumped) {
+            if (!dumped && debug) {
                 dumped = true;
-                dump(reels, decor, top, bottom);
+                final View dumpReels = reels;
+                final View dumpDecor = decor;
+                final int dumpTop = top;
+                final int dumpBottom = bottom;
+                // Wait for the expanded layout to settle.
+                decor.postDelayed(() -> {
+                    try {
+                        dump(dumpReels, dumpDecor, dumpTop, dumpBottom);
+                    } catch (Exception e) {
+                        Log.e(TAG, "dump failure", e);
+                    }
+                }, DUMP_DELAY_MS);
             }
         }
 
@@ -303,6 +334,40 @@ public final class ReelsFullscreenPatch {
             return true;
         }
 
+        /**
+         * Reel pages and their video cards can be sized in pixels from the height the Reels view
+         * had before it was expanded. Those are resized to the new height.
+         */
+        private void grow(View reels) {
+            int height = reels.getHeight();
+            if (baseHeight <= 0 || height <= baseHeight + TOLERANCE_PX) return;
+            if (reels instanceof ViewGroup) growChildren((ViewGroup) reels, height, 0);
+        }
+
+        private void growChildren(ViewGroup group, int height, int depth) {
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                ViewGroup.LayoutParams params = child.getLayoutParams();
+
+                if (params != null && params.height > 0
+                        && Math.abs(params.height - baseHeight) <= TOLERANCE_PX) {
+                    if (!grown.containsKey(child)) {
+                        grown.put(child, new int[]{params.width, params.height});
+                    }
+                    // Keep the shape of 9:16 cards.
+                    boolean portraitCard = params.width > 0
+                            && Math.abs(params.width * 16 - params.height * 9) <= 16 * TOLERANCE_PX;
+                    if (portraitCard) params.width = Math.round(height * 9 / 16f);
+                    params.height = height;
+                    child.setLayoutParams(params);
+                }
+
+                if (depth < MAX_GROW_DEPTH && child instanceof ViewGroup) {
+                    growChildren((ViewGroup) child, height, depth + 1);
+                }
+            }
+        }
+
         private boolean isTopInset(int value, int top) {
             return top > 0 && value > 0 && Math.abs(value - top) <= TOLERANCE_PX;
         }
@@ -322,41 +387,103 @@ public final class ReelsFullscreenPatch {
             }
             undo.clear();
             adjusted.clear();
+            for (Map.Entry<View, int[]> entry : grown.entrySet()) {
+                View view = entry.getKey();
+                ViewGroup.LayoutParams params = view == null ? null : view.getLayoutParams();
+                if (params == null) continue;
+                params.width = entry.getValue()[0];
+                params.height = entry.getValue()[1];
+                view.setLayoutParams(params);
+            }
+            grown.clear();
+            baseHeight = 0;
             showTabBar(tabBarId == 0 ? null : decor.findViewById(tabBarId));
             active = false;
             dumped = false;
         }
 
-        /** Logs the view chain above the Reels view, useful when a new Instagram version moves things around. */
+        /**
+         * Describes the views around and inside the Reels view, logs it and copies it to the
+         * clipboard. Useful when a new Instagram version or screen layout moves things around.
+         */
         private void dump(View reels, View decor, int top, int bottom) {
-            Resources resources = activity.getResources();
             StringBuilder builder = new StringBuilder();
             builder.append("insets top=").append(top).append(" bottom=").append(bottom)
-                    .append(" tabBarHeight=").append(tabBarHeight).append('\n');
+                    .append(" tabBarHeight=").append(tabBarHeight)
+                    .append(" tabBarHidden=").append(tabBarHidden)
+                    .append(" baseHeight=").append(baseHeight)
+                    .append(" decor=").append(decor.getWidth()).append('x').append(decor.getHeight())
+                    .append('\n');
 
+            builder.append("== ancestors and their children\n");
             View view = reels;
             while (view != null) {
-                String name = "no-id";
-                if (view.getId() != View.NO_ID) {
-                    try {
-                        name = resources.getResourceEntryName(view.getId());
-                    } catch (Resources.NotFoundException ignored) {
+                describe(builder, view, "");
+                if (view != reels && view instanceof ViewGroup) {
+                    ViewGroup group = (ViewGroup) view;
+                    for (int i = 0; i < group.getChildCount(); i++) {
+                        describe(builder, group.getChildAt(i), "    - ");
                     }
                 }
-                builder.append(view.getClass().getName()).append('#').append(name)
-                        .append(" bounds=").append(view.getLeft()).append(',').append(view.getTop())
-                        .append(',').append(view.getRight()).append(',').append(view.getBottom())
-                        .append(" padding=").append(view.getPaddingTop()).append('/').append(view.getPaddingBottom());
-                if (view.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
-                    ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
-                    builder.append(" margin=").append(params.topMargin).append('/').append(params.bottomMargin);
-                }
-                builder.append('\n');
-
                 if (view == decor || !(view.getParent() instanceof View)) break;
                 view = (View) view.getParent();
             }
-            Log.d(TAG, builder.toString());
+
+            builder.append("== inside reels view\n");
+            int[] lines = {0};
+            describeTree(builder, reels, 0, lines);
+
+            String text = builder.toString();
+            Log.d(TAG, text);
+
+            ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("Reels layout", text));
+                Toast.makeText(activity, "Reels layout copied to clipboard", Toast.LENGTH_LONG).show();
+            }
+        }
+
+        private void describeTree(StringBuilder builder, View view, int depth, int[] lines) {
+            if (lines[0]++ >= MAX_DUMP_LINES) return;
+            StringBuilder indent = new StringBuilder();
+            for (int i = 0; i < depth; i++) indent.append("  ");
+            describe(builder, view, indent.toString());
+
+            if (depth >= MAX_DUMP_DEPTH || !(view instanceof ViewGroup)) return;
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                describeTree(builder, group.getChildAt(i), depth + 1, lines);
+            }
+        }
+
+        private void describe(StringBuilder builder, View view, String prefix) {
+            String name = "no-id";
+            if (view.getId() != View.NO_ID) {
+                try {
+                    name = activity.getResources().getResourceEntryName(view.getId());
+                } catch (Resources.NotFoundException ignored) {
+                }
+            }
+            int[] location = new int[2];
+            view.getLocationInWindow(location);
+
+            builder.append(prefix).append(view.getClass().getName()).append('#').append(name)
+                    .append(" vis=").append(view.getVisibility())
+                    .append(" at=").append(location[0]).append(',').append(location[1])
+                    .append(" size=").append(view.getWidth()).append('x').append(view.getHeight())
+                    .append(" pad=").append(view.getPaddingTop()).append('/').append(view.getPaddingBottom());
+            ViewGroup.LayoutParams params = view.getLayoutParams();
+            if (params != null) {
+                builder.append(" lp=").append(params.width).append('x').append(params.height);
+                if (params instanceof ViewGroup.MarginLayoutParams) {
+                    ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) params;
+                    builder.append(" margin=").append(margins.topMargin).append('/').append(margins.bottomMargin);
+                }
+            }
+            if (view.getTranslationY() != 0 || view.getScaleY() != 1) {
+                builder.append(" ty=").append(view.getTranslationY()).append(" sy=").append(view.getScaleY());
+            }
+            builder.append('\n');
         }
     }
 }
