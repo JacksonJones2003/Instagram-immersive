@@ -1,12 +1,11 @@
 group = "app.template"
 
 patches {
-    // TODO: Update this section with your project details.
     about {
-        name = "UserXYZ Patches"
-        description = "Patches for apps I like"
-        source = "git@github.com:UserXYZ/morphe-patches.git"
-        author = "Awesome dev"
+        name = "Instagram Immersive"
+        description = "Fullscreen Reels for Instagram"
+        source = "git@github.com:JacksonJones2003/Instagram-immersive.git"
+        author = "JacksonJones2003"
         contact = "na"
         website = "na"
         license = "GPLv3"
