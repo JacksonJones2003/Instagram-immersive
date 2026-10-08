@@ -1,3 +1,9 @@
+## [1.0.0-dev.17](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.16...v1.0.0-dev.17) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Keep reel captions and list ends clear of the glass tab bar, larger touch area, show the messages button ([42ec6e9](https://github.com/JacksonJones2003/Instagram-immersive/commit/42ec6e99e04fe5530105800d76e54cb7e9adf2a4))
+
 ## [1.0.0-dev.16](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.15...v1.0.0-dev.16) (2026-10-08)
 
 ### ✨ New Features
