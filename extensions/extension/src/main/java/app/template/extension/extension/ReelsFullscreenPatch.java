@@ -6,12 +6,22 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PixelFormat;
+import android.graphics.RecordingCanvas;
+import android.graphics.RenderEffect;
+import android.graphics.RenderNode;
+import android.graphics.Shader;
 import android.graphics.RectF;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.MotionEvent;
@@ -85,6 +95,11 @@ public final class ReelsFullscreenPatch {
     // Passes between two searches for a navigation rail that has not been found.
     private static final int RAIL_SEARCH_INTERVAL = 30;
     private static final int RESTART_BUTTON_SIZE_DP = 48;
+    // Holds the screen of the current tab, the tab bar sits next to it.
+    private static final String CONTENT_ID = "layout_container_main";
+    private static final int MAX_BUTTONS_DEPTH = 4;
+    private static final int MIN_BUTTONS = 3;
+    private static final int GLASS_BLUR_DP = 20;
     private static final int RESTART_BUTTON_MARGIN_DP = 12;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
@@ -95,6 +110,7 @@ public final class ReelsFullscreenPatch {
     private static boolean moveButtons;
     private static boolean seamScrubber;
     private static boolean restartButton;
+    private static boolean glassBar;
 
     private ReelsFullscreenPatch() {
     }
@@ -122,6 +138,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Restart button on the navigation rail" patch. */
     public static void enableRestartButton() {
         restartButton = true;
+    }
+
+    /** Injection point. Added by the "Liquid glass navigation bar" patch. */
+    public static void enableGlassBar() {
+        glassBar = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -199,6 +220,7 @@ public final class ReelsFullscreenPatch {
         private final int mediaId;
         private final int buttonsId;
         private final int scrubberId;
+        private final int contentId;
 
         // What Instagram had set before it was changed, to put it back when Reels is left.
         /** Left, top, right and bottom padding. */
@@ -218,6 +240,15 @@ public final class ReelsFullscreenPatch {
         private final Map<View, Integer> faded = new WeakHashMap<>();
         private SeamBar seamBar;
         private RestartButton restartView;
+        private GlassBar tabGlass;
+        private GlassBar railGlass;
+        private WeakReference<View> lastTabBar = new WeakReference<>(null);
+        private WeakReference<View> lastContent = new WeakReference<>(null);
+        private WeakReference<View> floated = new WeakReference<>(null);
+        private int glassSearches;
+        private boolean blurFailed;
+        /** Height of the tab bar while it floats over the screen behind it, otherwise 0. */
+        private int floatLift;
         private WeakReference<View> lastRail = new WeakReference<>(null);
         private int railSearches;
         private boolean layoutChanged;
@@ -249,6 +280,7 @@ public final class ReelsFullscreenPatch {
             mediaId = resources.getIdentifier(MEDIA_ID, "id", packageName);
             buttonsId = resources.getIdentifier(BUTTONS_ID, "id", packageName);
             scrubberId = resources.getIdentifier(SCRUBBER_ID, "id", packageName);
+            contentId = resources.getIdentifier(CONTENT_ID, "id", packageName);
         }
 
         @Override
@@ -283,6 +315,7 @@ public final class ReelsFullscreenPatch {
         private void update() {
             View decor = activity.getWindow().getDecorView();
             if (restartButton) updateRestartButton(decor);
+            if (glassBar) updateGlass(decor);
             View reels = findReelsView(decor);
 
             if (reels == null) {
@@ -349,6 +382,159 @@ public final class ReelsFullscreenPatch {
         private boolean navigationRailShown(View decor) {
             View rail = findNavigationRail(decor);
             return rail != null && rail.isShown() && rail.getWidth() > 0;
+        }
+
+        private View lookup(View decor, int id, WeakReference<View> last) {
+            View view = last.get();
+            if (view != null && view.isAttachedToWindow()) return view;
+            if (id == 0 || glassSearches++ % RAIL_SEARCH_INTERVAL > 1) return null;
+            return decor.findViewById(id);
+        }
+
+        /**
+         * Draws the tab bar and the navigation rail as one rounded glass pill each.
+         * The tab bar also floats over the screen behind it, the rail stays next to it.
+         */
+        private void updateGlass(View decor) {
+            floatLift = 0;
+            try {
+                View tabBar = lookup(decor, tabBarId, lastTabBar);
+                if (tabBar != null && tabBar != lastTabBar.get()) lastTabBar = new WeakReference<>(tabBar);
+                if (tabBar != null && tabBar.isShown() && tabBar.getWidth() > 0 && tabBar.getHeight() > 0) {
+                    View content = lookup(decor, contentId, lastContent);
+                    if (content != null && content != lastContent.get()) lastContent = new WeakReference<>(content);
+                    if (tabGlass == null) tabGlass = new GlassBar(activity);
+                    floatContent(content, tabBar, decor);
+                    styleBar(tabGlass, tabBar, tabGlass.floating ? content : null);
+                    if (tabGlass.floating) floatLift = tabBar.getHeight();
+                }
+
+                View rail = findNavigationRail(decor);
+                if (rail != null && rail.isShown() && rail.getWidth() > 0) {
+                    if (railGlass == null) railGlass = new GlassBar(activity);
+                    styleBar(railGlass, rail, null);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "glass failure", e);
+            }
+        }
+
+        /** Lets the screen of the current tab run underneath the tab bar. */
+        private void floatContent(View content, View tabBar, View decor) {
+            tabGlass.floating = false;
+            if (content == null || !(content.getLayoutParams() instanceof ViewGroup.MarginLayoutParams)) return;
+            ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) content.getLayoutParams();
+
+            WindowInsets insets = decor.getRootWindowInsets();
+            int bottom = insets == null ? 0 : insets.getStableInsetBottom();
+            int reserved = params.bottomMargin;
+            if (reserved > 0 && (Math.abs(reserved - tabBar.getHeight()) <= TOLERANCE_PX
+                    || Math.abs(reserved - tabBar.getHeight() - bottom) <= TOLERANCE_PX)) {
+                params.bottomMargin = 0;
+                content.setLayoutParams(params);
+                floated = new WeakReference<>(content);
+                layoutChanged = true;
+            }
+            tabGlass.floating = floated.get() == content && params.bottomMargin == 0;
+        }
+
+        private void styleBar(GlassBar glass, View bar, View behind) {
+            Drawable background = bar.getBackground();
+            if (background != glass) {
+                // Instagram switches between a light and a dark bar, keep following that.
+                boolean night = (activity.getResources().getConfiguration().uiMode
+                        & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+                glass.light = !night;
+                if (background instanceof ColorDrawable) {
+                    int color = ((ColorDrawable) background).getColor();
+                    if (Color.alpha(color) > 0) glass.light = Color.luminance(color) > 0.5f;
+                }
+                bar.setBackground(glass);
+            }
+
+            ViewGroup buttons = findButtons(bar);
+            if (buttons == null) {
+                glass.clear();
+                return;
+            }
+            float left = 0;
+            float top = 0;
+            for (View view = buttons; view != bar; view = (View) view.getParent()) {
+                left += view.getLeft();
+                top += view.getTop();
+            }
+            glass.layout(bar, buttons, left, top);
+
+            if (behind == null || blurFailed || Build.VERSION.SDK_INT < 31 || glass.pill.isEmpty()) {
+                glass.blur = null;
+                return;
+            }
+            try {
+                if (glass.blur == null) {
+                    glass.blur = new GlassBlur(GLASS_BLUR_DP * activity.getResources().getDisplayMetrics().density);
+                }
+                int[] barLocation = new int[2];
+                int[] behindLocation = new int[2];
+                bar.getLocationInWindow(barLocation);
+                behind.getLocationInWindow(behindLocation);
+                ((GlassBlur) glass.blur).capture(behind,
+                        behindLocation[0] - barLocation[0] - glass.pill.left,
+                        behindLocation[1] - barLocation[1] - glass.pill.top,
+                        Math.round(glass.pill.width()), Math.round(glass.pill.height()));
+            } catch (Throwable e) {
+                // Not every device or view can be recorded like this, go without blur then.
+                Log.e(TAG, "blur failure", e);
+                blurFailed = true;
+                glass.blur = null;
+            }
+        }
+
+        /** The buttons of a bar are the first group of at least three views inside it. */
+        private ViewGroup findButtons(View bar) {
+            if (!(bar instanceof ViewGroup)) return null;
+            List<ViewGroup> level = new ArrayList<>();
+            level.add((ViewGroup) bar);
+            for (int depth = 0; depth < MAX_BUTTONS_DEPTH && !level.isEmpty(); depth++) {
+                List<ViewGroup> next = new ArrayList<>();
+                for (ViewGroup group : level) {
+                    int shown = 0;
+                    for (int i = 0; i < group.getChildCount(); i++) {
+                        View child = group.getChildAt(i);
+                        if (child.getVisibility() != View.VISIBLE || child.getWidth() == 0) continue;
+                        shown++;
+                        if (child instanceof ViewGroup) next.add((ViewGroup) child);
+                    }
+                    if (shown >= MIN_BUTTONS) return group;
+                }
+                level = next;
+            }
+            return null;
+        }
+
+        /** A reel runs underneath the floating tab bar, its caption and buttons stay above it. */
+        private void lift(ViewGroup content) {
+            float pageScale = content.getScaleY();
+            if (pageScale <= 0) return;
+            float shift = -floatLift / pageScale;
+
+            View card = findCard(content);
+            if (card instanceof ViewGroup) {
+                ViewGroup cardGroup = (ViewGroup) card;
+                View mediaBranch = childContaining(cardGroup, content.findViewById(mediaId));
+                for (int i = 0; i < cardGroup.getChildCount(); i++) {
+                    View child = cardGroup.getChildAt(i);
+                    Integer seen = enlarged.get(child);
+                    // Expanded photos already place these.
+                    if (child == mediaBranch || (seen != null && seen == pass)) continue;
+                    child.setTranslationY(shift);
+                    enlarged.put(child, pass);
+                }
+            }
+            View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
+            if (buttons != null && buttons.getParent() == content) {
+                buttons.setTranslationY(shift);
+                enlarged.put(buttons, pass);
+            }
         }
 
         /** Keeps a button that restarts Instagram at the bottom of the navigation rail. */
@@ -541,6 +727,7 @@ public final class ReelsFullscreenPatch {
                 if (expandMedia) enlarge((ViewGroup) content);
                 if (moveButtons) moveButtons((ViewGroup) content);
                 if (railShown) fade((ViewGroup) content);
+                if (floatLift > 0) lift((ViewGroup) content);
             }
             // Instagram reuses these views for other reels, anything not confirmed in this pass
             // must not keep its changes.
@@ -1136,6 +1323,198 @@ public final class ReelsFullscreenPatch {
                 canvas.drawLine(endX, endY, endX + 5 * density * (float) Math.cos(angle),
                         endY + 5 * density * (float) Math.sin(angle), paint);
             }
+        }
+    }
+
+    /**
+     * Background of a bar: one rounded pill around all of its buttons with a highlight that
+     * glides to the selected button.
+     */
+    private static final class GlassBar extends Drawable {
+        final RectF pill = new RectF();
+        private final RectF target = new RectF();
+        private final RectF bubble = new RectF();
+        private final RectF next = new RectF();
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float density;
+        private boolean hasTarget;
+        private boolean bubblePlaced;
+        boolean light;
+        boolean floating;
+        /** A GlassBlur, only on Android versions that have it. */
+        Object blur;
+
+        GlassBar(Context context) {
+            density = context.getResources().getDisplayMetrics().density;
+        }
+
+        void clear() {
+            if (pill.isEmpty()) return;
+            pill.setEmpty();
+            invalidateSelf();
+        }
+
+        void layout(View bar, ViewGroup buttons, float offsetX, float offsetY) {
+            float left = Float.MAX_VALUE;
+            float top = Float.MAX_VALUE;
+            float right = -Float.MAX_VALUE;
+            float bottom = -Float.MAX_VALUE;
+            View selected = null;
+            for (int i = 0; i < buttons.getChildCount(); i++) {
+                View child = buttons.getChildAt(i);
+                if (child.getVisibility() != View.VISIBLE || child.getWidth() == 0) continue;
+                left = Math.min(left, offsetX + child.getLeft());
+                top = Math.min(top, offsetY + child.getTop());
+                right = Math.max(right, offsetX + child.getRight());
+                bottom = Math.max(bottom, offsetY + child.getBottom());
+                if (selected == null && isSelected(child, 0)) selected = child;
+            }
+            if (right <= left || bottom <= top) {
+                clear();
+                return;
+            }
+
+            boolean horizontal = right - left > bottom - top;
+            if (horizontal) {
+                next.set(left + 12 * density, top + 5 * density, right - 12 * density, bottom - 5 * density);
+            } else {
+                float center = (left + right) / 2f;
+                float half = Math.max(26 * density, (right - left) / 2f - 10 * density);
+                half = Math.min(half, bar.getWidth() / 2f - 4 * density);
+                next.set(center - half, top - 8 * density, center + half, bottom + 8 * density);
+            }
+            boolean changed = !next.equals(pill);
+            pill.set(next);
+
+            boolean hadTarget = hasTarget;
+            hasTarget = selected != null;
+            if (hasTarget) {
+                float inset = 4 * density;
+                if (horizontal) {
+                    next.set(offsetX + selected.getLeft() + inset, pill.top + inset,
+                            offsetX + selected.getRight() - inset, pill.bottom - inset);
+                } else {
+                    next.set(pill.left + inset, offsetY + selected.getTop() + inset / 2,
+                            pill.right - inset, offsetY + selected.getBottom() - inset / 2);
+                }
+                next.left = Math.max(next.left, pill.left + inset);
+                next.right = Math.min(next.right, pill.right - inset);
+                changed |= !next.equals(target);
+                target.set(next);
+                if (!bubblePlaced) {
+                    bubble.set(target);
+                    bubblePlaced = true;
+                }
+            }
+            if (changed || hadTarget != hasTarget) invalidateSelf();
+        }
+
+        private boolean isSelected(View view, int depth) {
+            if (view.isSelected()) return true;
+            if (depth >= 3 || !(view instanceof ViewGroup)) return false;
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (isSelected(group.getChildAt(i), depth + 1)) return true;
+            }
+            return false;
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            if (pill.isEmpty()) return;
+            float radius = Math.min(pill.width(), pill.height()) / 2f;
+
+            boolean blurred = false;
+            if (blur != null && Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated()) {
+                blurred = ((GlassBlur) blur).draw(canvas, pill, radius);
+            }
+
+            paint.setStyle(Paint.Style.FILL);
+            if (blurred) {
+                paint.setColor(light ? 0x73FFFFFF : 0x59141414);
+            } else if (floating) {
+                paint.setColor(light ? 0xE6FFFFFF : 0xE61C1C1E);
+            } else {
+                paint.setColor(light ? 0x14000000 : 0x1FFFFFFF);
+            }
+            canvas.drawRoundRect(pill, radius, radius, paint);
+
+            if (hasTarget) {
+                // Glide a part of the remaining way on every frame.
+                float moved = glide();
+                paint.setColor(light ? 0x1F000000 : 0x33FFFFFF);
+                float bubbleRadius = Math.min(bubble.width(), bubble.height()) / 2f;
+                canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
+                if (moved > 0.5f) invalidateSelf();
+            }
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(density);
+            paint.setColor(light ? 0x66FFFFFF : 0x33FFFFFF);
+            canvas.drawRoundRect(pill, radius, radius, paint);
+        }
+
+        private float glide() {
+            float left = (target.left - bubble.left) * 0.3f;
+            float top = (target.top - bubble.top) * 0.3f;
+            float right = (target.right - bubble.right) * 0.3f;
+            float bottom = (target.bottom - bubble.bottom) * 0.3f;
+            float moved = Math.abs(left) + Math.abs(top) + Math.abs(right) + Math.abs(bottom);
+            if (moved <= 0.5f) {
+                bubble.set(target);
+            } else {
+                bubble.set(bubble.left + left, bubble.top + top, bubble.right + right, bubble.bottom + bottom);
+            }
+            return moved;
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter colorFilter) {
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
+    }
+
+    /** Blurred copy of what is behind a bar. Needs Android 12. */
+    private static final class GlassBlur {
+        private final RenderNode node = new RenderNode("piko-glass");
+        private final Path path = new Path();
+        private boolean recorded;
+
+        GlassBlur(float radius) {
+            node.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP));
+        }
+
+        void capture(View behind, float moveX, float moveY, int width, int height) {
+            if (width <= 0 || height <= 0) return;
+            node.setPosition(0, 0, width, height);
+            RecordingCanvas canvas = node.beginRecording(width, height);
+            try {
+                canvas.translate(moveX, moveY);
+                behind.draw(canvas);
+            } finally {
+                node.endRecording();
+            }
+            recorded = true;
+        }
+
+        boolean draw(Canvas canvas, RectF pill, float radius) {
+            if (!recorded) return false;
+            path.rewind();
+            path.addRoundRect(pill, radius, radius, Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(path);
+            canvas.translate(pill.left, pill.top);
+            canvas.drawRenderNode(node);
+            canvas.restore();
+            return true;
         }
     }
 }

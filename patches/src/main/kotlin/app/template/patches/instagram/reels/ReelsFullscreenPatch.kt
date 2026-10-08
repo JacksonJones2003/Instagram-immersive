@@ -132,6 +132,25 @@ val restartButtonOnRailPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val liquidGlassNavigationBarPatch = bytecodePatch(
+    name = "Liquid glass navigation bar",
+    description = "Draws the tab bar as a floating glass pill with a highlight that glides to the selected tab, " +
+        "and the navigation rail on large screens as a pill next to the content.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableGlassBar()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +
