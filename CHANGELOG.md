@@ -1,3 +1,9 @@
+## [1.0.0-dev.15](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.14...v1.0.0-dev.15) (2026-10-08)
+
+### ✨ New Features
+
+* Add glass to the navigation rail and a Replace create button with messages patch ([ce93e53](https://github.com/JacksonJones2003/Instagram-immersive/commit/ce93e534d3be3e7a9b86b2fc68a98ce4ec9d361a))
+
 ## [1.0.0-dev.14](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.13...v1.0.0-dev.14) (2026-10-08)
 
 ### 🐛 Bug Fixes
