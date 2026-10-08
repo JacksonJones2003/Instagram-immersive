@@ -2,8 +2,6 @@ package app.template.extension.extension;
 
 import android.app.Activity;
 import android.app.Application;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
@@ -15,8 +13,8 @@ import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
-import android.widget.Toast;
 
+import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -51,14 +49,10 @@ public final class ReelsFullscreenPatch {
     private static final float MIN_SCALE = 1.01f;
     // Stop adjusting when Instagram keeps putting its spacing back on every layout pass.
     private static final int MAX_CHURN = 50;
-    private static final int MAX_DUMP_DEPTH = 9;
-    private static final int MAX_DUMP_LINES = 300;
-    private static final long DUMP_DELAY_MS = 3000;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
     private static boolean registered;
     private static boolean hideTabBar;
-    private static boolean debug;
 
     private ReelsFullscreenPatch() {
     }
@@ -66,11 +60,6 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Hide tab bar in Reels" patch. */
     public static void enableHideTabBar() {
         hideTabBar = true;
-    }
-
-    /** Injection point. Added by the "Reels fullscreen debug" patch. */
-    public static void enableDebug() {
-        debug = true;
     }
 
     /** Injection point. Called from the application's onCreate. */
@@ -126,13 +115,16 @@ public final class ReelsFullscreenPatch {
 
             State state = new State(activity);
             STATES.put(activity, state);
-            window.getDecorView().getViewTreeObserver().addOnGlobalLayoutListener(state);
+            ViewTreeObserver observer = window.getDecorView().getViewTreeObserver();
+            observer.addOnGlobalLayoutListener(state);
+            observer.addOnPreDrawListener(state);
         } catch (Exception e) {
             Log.e(TAG, "attach failure", e);
         }
     }
 
-    private static final class State implements ViewTreeObserver.OnGlobalLayoutListener {
+    private static final class State implements ViewTreeObserver.OnGlobalLayoutListener,
+            ViewTreeObserver.OnPreDrawListener {
         private final Activity activity;
         private final int[] reelsViewIds;
         private final int tabBarId;
@@ -151,13 +143,11 @@ public final class ReelsFullscreenPatch {
         /** Reel pages that were scaled up to the new Reels height. */
         private final Map<View, Boolean> scaled = new WeakHashMap<>();
 
+        private WeakReference<View> lastReels = new WeakReference<>(null);
         private boolean applying;
         private boolean active;
-        private boolean dumped;
         private boolean tabBarHidden;
         private int tabBarHeight;
-        /** Height of the Reels view before it was expanded. */
-        private int baseHeight;
 
         State(Activity activity) {
             this.activity = activity;
@@ -170,6 +160,14 @@ public final class ReelsFullscreenPatch {
             }
             tabBarId = resources.getIdentifier(TAB_BAR_ID, "id", packageName);
             navigationRailId = resources.getIdentifier(NAVIGATION_RAIL_ID, "id", packageName);
+        }
+
+        @Override
+        public boolean onPreDraw() {
+            // Reel pages fill in their content without a layout pass, and Instagram puts its
+            // spacing back at times, so one layout callback is not enough to catch everything.
+            onGlobalLayout();
+            return true;
         }
 
         @Override
@@ -200,49 +198,39 @@ public final class ReelsFullscreenPatch {
             int top = insets.getStableInsetTop();
             int bottom = insets.getStableInsetBottom();
 
-            View tabBar = tabBarId == 0 ? null : decor.findViewById(tabBarId);
-            if (tabBar != null && tabBar.getVisibility() == View.VISIBLE && tabBar.getHeight() > 0) {
-                tabBarHeight = tabBar.getHeight();
-            }
-
-            if (!active) {
-                active = true;
-                baseHeight = reels.getHeight();
-            }
+            active = true;
             // Folding, unfolding and rotating make Instagram apply its spacing again,
             // so everything is checked on every pass instead of once.
-            if (navigationRailShown(decor)) tabBarHidden = false;
             drawBehindStatusBar(decor);
-            if (hideTabBar) hideTabBar(tabBar);
+            if (hideTabBar) {
+                View tabBar = tabBarId == 0 ? null : decor.findViewById(tabBarId);
+                if (tabBar != null && tabBar.getVisibility() == View.VISIBLE && tabBar.getHeight() > 0) {
+                    tabBarHeight = tabBar.getHeight();
+                }
+                if (tabBarHidden && navigationRailShown(decor)) tabBarHidden = false;
+                hideTabBar(tabBar);
+            }
             if (churn <= MAX_CHURN) {
                 changed = false;
                 expand(reels, decor, top, bottom);
                 churn = changed ? churn + 1 : 0;
             }
             fill(reels);
-
-            if (!dumped && debug) {
-                dumped = true;
-                final View dumpReels = reels;
-                final View dumpDecor = decor;
-                final int dumpTop = top;
-                final int dumpBottom = bottom;
-                // Wait for the expanded layout to settle.
-                decor.postDelayed(() -> {
-                    try {
-                        dump(dumpReels, dumpDecor, dumpTop, dumpBottom);
-                    } catch (Exception e) {
-                        Log.e(TAG, "dump failure", e);
-                    }
-                }, DUMP_DELAY_MS);
-            }
         }
 
         private View findReelsView(View decor) {
+            // This runs for every frame, skip the lookup while the same view is still on screen.
+            View last = lastReels.get();
+            if (last != null && last.isAttachedToWindow() && last.isShown() && last.getWidth() > 0) {
+                return last;
+            }
             for (int id : reelsViewIds) {
                 if (id == 0) continue;
                 View view = decor.findViewById(id);
-                if (view != null && view.isShown() && view.getWidth() > 0) return view;
+                if (view != null && view.isShown() && view.getWidth() > 0) {
+                    lastReels = new WeakReference<>(view);
+                    return view;
+                }
             }
             return null;
         }
@@ -498,96 +486,10 @@ public final class ReelsFullscreenPatch {
             }
 
             showTabBar(decor);
-            baseHeight = 0;
             churn = 0;
             active = false;
-            dumped = false;
             // The remembered spacing can be from before a fold or rotation, let Instagram redo it.
             decor.requestApplyInsets();
-        }
-
-        /**
-         * Describes the views around and inside the Reels view, logs it and copies it to the
-         * clipboard. Useful when a new Instagram version or screen layout moves things around.
-         */
-        private void dump(View reels, View decor, int top, int bottom) {
-            StringBuilder builder = new StringBuilder();
-            builder.append("insets top=").append(top).append(" bottom=").append(bottom)
-                    .append(" tabBarHeight=").append(tabBarHeight)
-                    .append(" tabBarHidden=").append(tabBarHidden)
-                    .append(" baseHeight=").append(baseHeight)
-                    .append(" decor=").append(decor.getWidth()).append('x').append(decor.getHeight())
-                    .append('\n');
-
-            builder.append("== ancestors and their children\n");
-            View view = reels;
-            while (view != null) {
-                describe(builder, view, "");
-                if (view != reels && view instanceof ViewGroup) {
-                    ViewGroup group = (ViewGroup) view;
-                    for (int i = 0; i < group.getChildCount(); i++) {
-                        describe(builder, group.getChildAt(i), "    - ");
-                    }
-                }
-                if (view == decor || !(view.getParent() instanceof View)) break;
-                view = (View) view.getParent();
-            }
-
-            builder.append("== inside reels view\n");
-            int[] lines = {0};
-            describeTree(builder, reels, 0, lines);
-
-            String text = builder.toString();
-            Log.d(TAG, text);
-
-            ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (clipboard != null) {
-                clipboard.setPrimaryClip(ClipData.newPlainText("Reels layout", text));
-                Toast.makeText(activity, "Reels layout copied to clipboard", Toast.LENGTH_LONG).show();
-            }
-        }
-
-        private void describeTree(StringBuilder builder, View view, int depth, int[] lines) {
-            if (lines[0]++ >= MAX_DUMP_LINES) return;
-            StringBuilder indent = new StringBuilder();
-            for (int i = 0; i < depth; i++) indent.append("  ");
-            describe(builder, view, indent.toString());
-
-            if (depth >= MAX_DUMP_DEPTH || !(view instanceof ViewGroup)) return;
-            ViewGroup group = (ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                describeTree(builder, group.getChildAt(i), depth + 1, lines);
-            }
-        }
-
-        private void describe(StringBuilder builder, View view, String prefix) {
-            String name = "no-id";
-            if (view.getId() != View.NO_ID) {
-                try {
-                    name = activity.getResources().getResourceEntryName(view.getId());
-                } catch (Resources.NotFoundException ignored) {
-                }
-            }
-            int[] location = new int[2];
-            view.getLocationInWindow(location);
-
-            builder.append(prefix).append(view.getClass().getName()).append('#').append(name)
-                    .append(" vis=").append(view.getVisibility())
-                    .append(" at=").append(location[0]).append(',').append(location[1])
-                    .append(" size=").append(view.getWidth()).append('x').append(view.getHeight())
-                    .append(" pad=").append(view.getPaddingTop()).append('/').append(view.getPaddingBottom());
-            ViewGroup.LayoutParams params = view.getLayoutParams();
-            if (params != null) {
-                builder.append(" lp=").append(params.width).append('x').append(params.height);
-                if (params instanceof ViewGroup.MarginLayoutParams) {
-                    ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) params;
-                    builder.append(" margin=").append(margins.topMargin).append('/').append(margins.bottomMargin);
-                }
-            }
-            if (view.getTranslationY() != 0 || view.getScaleY() != 1) {
-                builder.append(" ty=").append(view.getTranslationY()).append(" sy=").append(view.getScaleY());
-            }
-            builder.append('\n');
         }
     }
 }

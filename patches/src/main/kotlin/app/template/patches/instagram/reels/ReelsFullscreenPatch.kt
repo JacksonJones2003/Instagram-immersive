@@ -44,25 +44,6 @@ val reelsFullscreenPatch = bytecodePatch(
 val hideTabBarInReelsPatch = bytecodePatch(
     name = "Hide tab bar in Reels",
     description = "Hides the bottom tab bar while Reels is on screen. Use the back gesture to leave Reels.",
-    default = true,
-) {
-    compatibleWith(COMPATIBILITY_INSTAGRAM)
-
-    dependsOn(reelsFullscreenPatch)
-
-    execute {
-        InstagramAppShellOnCreateFingerprint.method.addInstruction(
-            0,
-            "invoke-static {}, $EXTENSION_CLASS->enableHideTabBar()V",
-        )
-    }
-}
-
-@Suppress("unused")
-val reelsFullscreenDebugPatch = bytecodePatch(
-    name = "Reels fullscreen debug",
-    description = "Copies a description of the Reels screen layout to the clipboard a few seconds " +
-        "after opening Reels. Only needed to report layout problems.",
     default = false,
 ) {
     compatibleWith(COMPATIBILITY_INSTAGRAM)
@@ -72,7 +53,7 @@ val reelsFullscreenDebugPatch = bytecodePatch(
     execute {
         InstagramAppShellOnCreateFingerprint.method.addInstruction(
             0,
-            "invoke-static {}, $EXTENSION_CLASS->enableDebug()V",
+            "invoke-static {}, $EXTENSION_CLASS->enableHideTabBar()V",
         )
     }
 }
