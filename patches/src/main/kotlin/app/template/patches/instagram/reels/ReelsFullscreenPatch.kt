@@ -95,6 +95,25 @@ val moveReelsButtonsPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val reelsProgressBarOnRailPatch = bytecodePatch(
+    name = "Reels progress bar on the navigation rail",
+    description = "Shows the progress bar of Reels as a vertical bar between the navigation rail " +
+        "and the reel on large screens.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableSeamScrubber()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +

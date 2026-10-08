@@ -6,10 +6,13 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.res.Resources;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -17,6 +20,7 @@ import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import java.lang.ref.WeakReference;
@@ -64,6 +68,9 @@ public final class ReelsFullscreenPatch {
     private static final float MIN_ENLARGE = 1.02f;
     // How far the card is grown past the page to get its border off screen.
     private static final float CARD_OVERSCAN = 1.03f;
+    // Progress bar of a video reel.
+    private static final String SCRUBBER_ID = "scrubber";
+    private static final int SEAM_TOUCH_WIDTH_DP = 28;
     // Column with the like, comment and share buttons.
     private static final String BUTTONS_ID = "clips_ufi_component";
     private static final int MAX_DUMP_DEPTH = 18;
@@ -78,6 +85,7 @@ public final class ReelsFullscreenPatch {
     private static boolean debug;
     private static boolean expandMedia;
     private static boolean moveButtons;
+    private static boolean seamScrubber;
 
     private ReelsFullscreenPatch() {
     }
@@ -95,6 +103,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Move Reels buttons to the edge" patch. */
     public static void enableMoveButtons() {
         moveButtons = true;
+    }
+
+    /** Injection point. Added by the "Reels progress bar on the navigation rail" patch. */
+    public static void enableSeamScrubber() {
+        seamScrubber = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -171,6 +184,7 @@ public final class ReelsFullscreenPatch {
         private final int navigationRailId;
         private final int mediaId;
         private final int buttonsId;
+        private final int scrubberId;
 
         // What Instagram had set before it was changed, to put it back when Reels is left.
         /** Left, top, right and bottom padding. */
@@ -186,6 +200,10 @@ public final class ReelsFullscreenPatch {
         private final Map<View, Boolean> scaled = new WeakHashMap<>();
         /** Views inside a page that were scaled or moved, with the pass they were last seen in. */
         private final Map<View, Integer> enlarged = new WeakHashMap<>();
+        /** Progress bars that were made invisible, with the pass they were last seen in. */
+        private final Map<View, Integer> faded = new WeakHashMap<>();
+        private SeamBar seamBar;
+        private boolean railShown;
         private int pass;
 
         private WeakReference<View> lastReels = new WeakReference<>(null);
@@ -209,6 +227,7 @@ public final class ReelsFullscreenPatch {
             navigationRailId = resources.getIdentifier(NAVIGATION_RAIL_ID, "id", packageName);
             mediaId = resources.getIdentifier(MEDIA_ID, "id", packageName);
             buttonsId = resources.getIdentifier(BUTTONS_ID, "id", packageName);
+            scrubberId = resources.getIdentifier(SCRUBBER_ID, "id", packageName);
         }
 
         @Override
@@ -264,7 +283,9 @@ public final class ReelsFullscreenPatch {
                 expand(reels, decor, top, bottom);
                 churn = changed ? churn + 1 : 0;
             }
+            railShown = seamScrubber && navigationRailShown(decor);
             fill(reels);
+            if (seamScrubber) updateSeamBar(reels, decor, top, bottom);
             if (debug) watchPage(reels);
         }
 
@@ -430,6 +451,7 @@ public final class ReelsFullscreenPatch {
                 scale((ViewGroup) content);
                 if (expandMedia) enlarge((ViewGroup) content);
                 if (moveButtons) moveButtons((ViewGroup) content);
+                if (railShown) fade((ViewGroup) content);
             }
             // Instagram reuses these views for other reels, anything not confirmed in this pass
             // must not keep its changes.
@@ -507,6 +529,54 @@ public final class ReelsFullscreenPatch {
             }
         }
 
+        /** The progress bar of a reel is shown on the navigation rail instead. */
+        private void fade(ViewGroup content) {
+            View scrubber = scrubberId == 0 ? null : content.findViewById(scrubberId);
+            if (!(scrubber instanceof ProgressBar)) return;
+            scrubber.setAlpha(0f);
+            faded.put(scrubber, pass);
+        }
+
+        /**
+         * Shows the progress of the current reel as a vertical bar on the seam between the
+         * navigation rail and the reel, and passes drags on it on to Instagram's own progress bar.
+         */
+        private void updateSeamBar(View reels, View decor, int top, int bottom) {
+            View scrubber = null;
+            if (railShown) {
+                View page = currentPage(reels);
+                View candidate = page == null || scrubberId == 0 ? null : page.findViewById(scrubberId);
+                if (candidate instanceof ProgressBar && candidate.getVisibility() == View.VISIBLE
+                        && candidate.getWidth() > 0 && ((ProgressBar) candidate).getMax() > 0) {
+                    scrubber = candidate;
+                }
+            }
+            if (scrubber == null) {
+                if (seamBar != null) seamBar.setVisibility(View.GONE);
+                return;
+            }
+
+            View root = decor.findViewById(android.R.id.content);
+            if (!(root instanceof ViewGroup)) return;
+            if (seamBar == null) seamBar = new SeamBar(activity);
+            int width = Math.round(SEAM_TOUCH_WIDTH_DP * activity.getResources().getDisplayMetrics().density);
+            if (seamBar.getParent() != root) {
+                if (seamBar.getParent() instanceof ViewGroup) ((ViewGroup) seamBar.getParent()).removeView(seamBar);
+                ((ViewGroup) root).addView(seamBar,
+                        new ViewGroup.LayoutParams(width, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            seamBar.setVisibility(View.VISIBLE);
+
+            int[] reelsLocation = new int[2];
+            int[] rootLocation = new int[2];
+            reels.getLocationInWindow(reelsLocation);
+            root.getLocationInWindow(rootLocation);
+            seamBar.setTranslationX(reelsLocation[0] - rootLocation[0] - width / 2f);
+
+            ProgressBar progress = (ProgressBar) scrubber;
+            seamBar.show(scrubber, progress.getProgress() / (float) progress.getMax(), top, bottom);
+        }
+
         /** Moves the like, comment and share buttons to the right edge of the page. */
         private void moveButtons(ViewGroup content) {
             View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
@@ -570,6 +640,13 @@ public final class ReelsFullscreenPatch {
                     view.setTranslationX(0f);
                     view.setTranslationY(0f);
                 }
+                iterator.remove();
+            }
+
+            for (Iterator<Map.Entry<View, Integer>> iterator = faded.entrySet().iterator(); iterator.hasNext(); ) {
+                Map.Entry<View, Integer> entry = iterator.next();
+                if (!all && entry.getValue() == pass) continue;
+                if (entry.getKey() != null) entry.getKey().setAlpha(1f);
                 iterator.remove();
             }
         }
@@ -677,6 +754,9 @@ public final class ReelsFullscreenPatch {
             }
             scaled.clear();
             resetEnlarged(true);
+            if (seamBar != null && seamBar.getParent() instanceof ViewGroup) {
+                ((ViewGroup) seamBar.getParent()).removeView(seamBar);
+            }
 
             if (addedUiFlags != 0) {
                 decor.setSystemUiVisibility(decor.getSystemUiVisibility() & ~addedUiFlags);
@@ -786,6 +866,93 @@ public final class ReelsFullscreenPatch {
             }
             if (view.getContentDescription() != null) builder.append(" described");
             builder.append('\n');
+        }
+    }
+
+    /** Vertical progress bar that controls the progress bar of a reel. */
+    private static final class SeamBar extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float density;
+        private WeakReference<View> target = new WeakReference<>(null);
+        private float fraction;
+        private boolean dragging;
+        private int insetTop;
+        private int insetBottom;
+
+        SeamBar(Context context) {
+            super(context);
+            density = context.getResources().getDisplayMetrics().density;
+            paint.setStrokeCap(Paint.Cap.ROUND);
+        }
+
+        void show(View scrubber, float progress, int top, int bottom) {
+            if (target.get() != scrubber) target = new WeakReference<>(scrubber);
+            boolean changed = insetTop != top || insetBottom != bottom;
+            insetTop = top;
+            insetBottom = bottom;
+            // While dragging the finger decides where the bar is.
+            if (!dragging && Math.abs(progress - fraction) > 0.0005f) {
+                fraction = progress;
+                changed = true;
+            }
+            if (changed) invalidate();
+        }
+
+        private float trackTop() {
+            return insetTop + 8 * density;
+        }
+
+        private float trackBottom() {
+            return getHeight() - insetBottom - 16 * density;
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float top = trackTop();
+            float bottom = trackBottom();
+            if (bottom <= top) return;
+
+            float x = getWidth() / 2f;
+            paint.setStrokeWidth((dragging ? 6 : 3) * density);
+            paint.setColor(0x55FFFFFF);
+            canvas.drawLine(x, top, x, bottom, paint);
+            paint.setColor(Color.WHITE);
+            canvas.drawLine(x, top, x, top + fraction * (bottom - top), paint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            View scrubber = target.get();
+            float top = trackTop();
+            float bottom = trackBottom();
+            if (scrubber == null || bottom <= top) return false;
+
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                dragging = true;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                dragging = false;
+            } else if (action != MotionEvent.ACTION_MOVE) {
+                return true;
+            }
+
+            fraction = Math.max(0f, Math.min(1f, (event.getY() - top) / (bottom - top)));
+            invalidate();
+
+            // Instagram's progress bar is horizontal, a point along this bar is the same point along that one.
+            int left = scrubber.getPaddingLeft();
+            float x = left + fraction * (scrubber.getWidth() - left - scrubber.getPaddingRight());
+            MotionEvent forwarded = MotionEvent.obtain(event.getDownTime(), event.getEventTime(),
+                    action, x, scrubber.getHeight() / 2f, 0);
+            try {
+                scrubber.dispatchTouchEvent(forwarded);
+            } catch (Exception e) {
+                Log.e(TAG, "seek failure", e);
+            } finally {
+                forwarded.recycle();
+            }
+            return true;
         }
     }
 }
