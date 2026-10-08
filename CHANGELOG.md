@@ -1,3 +1,9 @@
+## [1.0.0-dev.2](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Resize Reels video card after expanding and add layout debug patch ([aac9f14](https://github.com/JacksonJones2003/Instagram-immersive/commit/aac9f1403363f3f3d1226dafa5fa024ec6f0ddb7))
+
 ## 1.0.0-dev.1 (2026-10-08)
 
 ### ✨ New Features
