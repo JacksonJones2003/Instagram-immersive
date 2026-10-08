@@ -1,3 +1,9 @@
+## [1.0.0-dev.8](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.7...v1.0.0-dev.8) (2026-10-08)
+
+### ✨ New Features
+
+* Hide the card border on expanded photos and add Move Reels buttons to the edge patch ([70bdc4e](https://github.com/JacksonJones2003/Instagram-immersive/commit/70bdc4ee9712526d5866716daf00b649fdb61262))
+
 ## [1.0.0-dev.7](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.6...v1.0.0-dev.7) (2026-10-08)
 
 ### ✨ New Features
