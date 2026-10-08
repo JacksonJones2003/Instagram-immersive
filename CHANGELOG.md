@@ -1,3 +1,9 @@
+## [1.0.0-dev.6](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.5...v1.0.0-dev.6) (2026-10-08)
+
+### ✨ New Features
+
+* Add per-reel layout debug patch ([d1ea776](https://github.com/JacksonJones2003/Instagram-immersive/commit/d1ea776b41b3fcbdf90c9ea9b75abf12f95436ad))
+
 ## [1.0.0-dev.5](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.4...v1.0.0-dev.5) (2026-10-08)
 
 ### 🐛 Bug Fixes
