@@ -920,6 +920,31 @@ public final class ReelsFullscreenPatch {
             int[] lines = {0};
             describeTree(builder, page, 0, lines);
 
+            // The bars around the reel and everything the reel sits in.
+            View tabBar = tabBarId == 0 ? null : decor.findViewById(tabBarId);
+            if (tabBar != null) {
+                builder.append("== tab bar\n");
+                describeTree(builder, tabBar, 0, new int[]{MAX_DUMP_LINES - 60});
+                if (tabBar.getParent() instanceof ViewGroup) {
+                    builder.append("== next to the tab bar\n");
+                    ViewGroup parent = (ViewGroup) tabBar.getParent();
+                    for (int i = 0; i < parent.getChildCount(); i++) {
+                        if (parent.getChildAt(i).getVisibility() == View.VISIBLE) {
+                            describe(builder, parent.getChildAt(i), " ");
+                        }
+                    }
+                }
+            }
+            View rail = findNavigationRail(decor);
+            if (rail != null) {
+                builder.append("== navigation rail\n");
+                describeTree(builder, rail, 0, new int[]{MAX_DUMP_LINES - 60});
+            }
+            builder.append("== above the reels\n");
+            for (View view = reels; view != null; view = view.getParent() instanceof View ? (View) view.getParent() : null) {
+                describe(builder, view, "");
+            }
+
             String text = builder.toString();
             Log.d(TAG, text);
             ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -959,6 +984,18 @@ public final class ReelsFullscreenPatch {
                     .append(" size=").append(view.getWidth()).append('x').append(view.getHeight());
             ViewGroup.LayoutParams params = view.getLayoutParams();
             if (params != null) builder.append(" lp=").append(params.width).append('x').append(params.height);
+            if (params instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) params;
+                if (margins.topMargin != 0 || margins.bottomMargin != 0) {
+                    builder.append(" margin=").append(margins.topMargin).append('/').append(margins.bottomMargin);
+                }
+            }
+            if (view.getPaddingTop() != 0 || view.getPaddingBottom() != 0) {
+                builder.append(" pad=").append(view.getPaddingTop()).append('/').append(view.getPaddingBottom());
+            }
+            if (view.getBackground() != null) {
+                builder.append(" bg=").append(view.getBackground().getClass().getSimpleName());
+            }
             if (view.getScaleY() != 1 || view.getTranslationY() != 0) {
                 builder.append(" sy=").append(view.getScaleY()).append(" ty=").append(view.getTranslationY());
             }
