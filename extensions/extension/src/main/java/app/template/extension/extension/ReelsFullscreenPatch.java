@@ -29,6 +29,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -111,6 +112,11 @@ public final class ReelsFullscreenPatch {
     private static final String TAB_BAR_LINE_ID = "tab_bar_shadow";
     // How much the button under the finger grows while sliding over the tab bar.
     private static final float HOVER_SCALE = 1.18f;
+    // The tab bar also takes touches this far above itself.
+    private static final int BAR_TOUCH_EXTRA_DP = 16;
+    private static final int MAX_LIFT_DEPTH = 8;
+    private static final int MAX_LIST_DEPTH = 12;
+    private static final int LIST_SEARCH_INTERVAL = 20;
     private static final int RESTART_BUTTON_MARGIN_DP = 12;
 
     private static final Map<Activity, State> STATES = new WeakHashMap<>();
@@ -263,6 +269,12 @@ public final class ReelsFullscreenPatch {
         private BarTouch barTouch;
         private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
         private boolean hovering;
+        private int barTouchExtra;
+        /** Parts of a reel that were moved above the floating tab bar, with their last pass. */
+        private final Map<View, Integer> lifted = new WeakHashMap<>();
+        /** Lists that got room to scroll clear of the floating tab bar, with their own bottom padding. */
+        private final Map<View, Integer> listPadding = new WeakHashMap<>();
+        private int listSearches;
         private GlassBar railGlass;
         private WeakReference<View> lastTabBar = new WeakReference<>(null);
         private WeakReference<View> lastContent = new WeakReference<>(null);
@@ -429,7 +441,12 @@ public final class ReelsFullscreenPatch {
                     if (tabGlass == null) tabGlass = new GlassBar(activity);
                     floatContent(content, tabBar, decor);
                     styleBar(tabGlass, tabBar, tabGlass.floating ? content : null, false);
-                    if (tabGlass.floating) floatLift = tabBar.getHeight();
+                    if (tabGlass.floating) {
+                        floatLift = tabBar.getHeight();
+                        insetLists(content, tabBar);
+                    } else {
+                        restoreLists();
+                    }
 
                     View line = lookup(decor, tabBarLineId, lastTabBarLine);
                     if (line != null) {
@@ -438,8 +455,9 @@ public final class ReelsFullscreenPatch {
                     }
                     placeBarTouch(tabBar);
                     hover(tabBar);
-                } else if (barTouch != null) {
-                    barTouch.setVisibility(View.GONE);
+                } else {
+                    restoreLists();
+                    if (barTouch != null) barTouch.setVisibility(View.GONE);
                 }
 
                 // Nothing runs underneath the rail, its glass shows the colors of the screen next to it.
@@ -483,14 +501,15 @@ public final class ReelsFullscreenPatch {
             } else if (parent.getChildAt(parent.getChildCount() - 1) != barTouch) {
                 barTouch.bringToFront();
             }
+            barTouchExtra = Math.round(BAR_TOUCH_EXTRA_DP * activity.getResources().getDisplayMetrics().density);
             ViewGroup.LayoutParams params = barTouch.getLayoutParams();
-            if (params.width != tabBar.getWidth() || params.height != tabBar.getHeight()) {
+            if (params.width != tabBar.getWidth() || params.height != tabBar.getHeight() + barTouchExtra) {
                 params.width = tabBar.getWidth();
-                params.height = tabBar.getHeight();
+                params.height = tabBar.getHeight() + barTouchExtra;
                 barTouch.setLayoutParams(params);
             }
             barTouch.setTranslationX(tabBar.getLeft() + tabBar.getTranslationX());
-            barTouch.setTranslationY(tabBar.getTop() + tabBar.getTranslationY());
+            barTouch.setTranslationY(tabBar.getTop() + tabBar.getTranslationY() - barTouchExtra);
             barTouch.setVisibility(View.VISIBLE);
         }
 
@@ -556,6 +575,9 @@ public final class ReelsFullscreenPatch {
                     return;
                 }
 
+                // Most buttons take a plain click, the others get a touch in their middle.
+                if (button.performClick()) return;
+
                 float centerX = button.getWidth() / 2f;
                 float centerY = button.getHeight() / 2f;
                 for (View view = button; view != tabBar; view = (View) view.getParent()) {
@@ -565,6 +587,8 @@ public final class ReelsFullscreenPatch {
                 long now = SystemClock.uptimeMillis();
                 MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, centerX, centerY, 0);
                 MotionEvent up = MotionEvent.obtain(now, now + 40, MotionEvent.ACTION_UP, centerX, centerY, 0);
+                down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+                up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
                 try {
                     tabBar.dispatchTouchEvent(down);
                     tabBar.dispatchTouchEvent(up);
@@ -582,6 +606,8 @@ public final class ReelsFullscreenPatch {
             View tabBar = lastTabBar.get();
             if (tabBar == null) return;
             MotionEvent copy = MotionEvent.obtain(event);
+            // The touch area starts above the tab bar.
+            copy.offsetLocation(0, -barTouchExtra);
             try {
                 tabBar.dispatchTouchEvent(copy);
             } catch (Exception e) {
@@ -645,7 +671,16 @@ public final class ReelsFullscreenPatch {
                 ViewGroup parent = (ViewGroup) tabBar.getParent();
 
                 // Instagram's button stays where it is, unseen, so the other buttons keep their places.
+                // It can be hidden altogether, then there is no place for the messages button yet.
                 create.setAlpha(0f);
+                if (create.getVisibility() != View.VISIBLE) {
+                    create.setVisibility(View.VISIBLE);
+                    layoutChanged = true;
+                }
+                if (create.getWidth() == 0 || create.getHeight() == 0) {
+                    if (messagesView != null) messagesView.setVisibility(View.GONE);
+                    return;
+                }
                 if (messagesView == null) {
                     messagesView = new MessagesButton(activity);
                     messagesView.setOnClickListener(view -> openMessages());
@@ -766,30 +801,88 @@ public final class ReelsFullscreenPatch {
             return null;
         }
 
-        /** A reel runs underneath the floating tab bar, its caption and buttons stay above it. */
+        /**
+         * A reel runs underneath the floating tab bar. Everything in the lower part of the page
+         * that is not the video itself, like the caption and the buttons, moves up above the bar.
+         */
         private void lift(ViewGroup content) {
             float pageScale = content.getScaleY();
-            if (pageScale <= 0) return;
-            float shift = -floatLift / pageScale;
+            if (pageScale <= 0 || content.getHeight() == 0) return;
+            liftChildren(content, 0, content.getHeight(), -floatLift / pageScale, 0);
+        }
 
-            View card = findCard(content);
-            if (card instanceof ViewGroup) {
-                ViewGroup cardGroup = (ViewGroup) card;
-                View mediaBranch = childContaining(cardGroup, content.findViewById(mediaId));
-                for (int i = 0; i < cardGroup.getChildCount(); i++) {
-                    View child = cardGroup.getChildAt(i);
-                    Integer seen = enlarged.get(child);
-                    // Expanded photos already place these.
-                    if (child == mediaBranch || (seen != null && seen == pass)) continue;
+        private void liftChildren(ViewGroup group, float groupTop, int pageHeight, float shift, int depth) {
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (child.getVisibility() != View.VISIBLE || child.getHeight() == 0) continue;
+                // Expanded photos size and place their own parts.
+                if (child.getScaleY() != 1f) continue;
+
+                float top = groupTop + child.getTop();
+                float bottom = top + child.getHeight();
+                // Tall views and views that start high up hold the video or other parts.
+                boolean holder = child.getHeight() > 0.6f * pageHeight || top < 0.4f * pageHeight;
+                if (!holder) {
                     child.setTranslationY(shift);
-                    enlarged.put(child, pass);
+                    lifted.put(child, pass);
+                } else if (child instanceof ViewGroup && depth < MAX_LIFT_DEPTH && bottom > pageHeight - floatLift) {
+                    liftChildren((ViewGroup) child, top, pageHeight, shift, depth + 1);
                 }
             }
-            View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
-            if (buttons != null && buttons.getParent() == content) {
-                buttons.setTranslationY(shift);
-                enlarged.put(buttons, pass);
+        }
+
+        /** Lists end underneath the floating tab bar, they get room to scroll their end clear of it. */
+        private void insetLists(View content, View tabBar) {
+            if (!(content instanceof ViewGroup) || listSearches++ % LIST_SEARCH_INTERVAL != 0) return;
+            int[] location = new int[2];
+            tabBar.getLocationInWindow(location);
+            int barTop = location[1];
+
+            List<ViewGroup> level = new ArrayList<>();
+            level.add((ViewGroup) content);
+            for (int depth = 0; depth < MAX_LIST_DEPTH && !level.isEmpty(); depth++) {
+                List<ViewGroup> next = new ArrayList<>();
+                for (ViewGroup group : level) {
+                    for (int i = 0; i < group.getChildCount(); i++) {
+                        View child = group.getChildAt(i);
+                        if (!(child instanceof ViewGroup) || child.getVisibility() != View.VISIBLE) continue;
+                        // Reels are pages, not a list, and are handled on their own.
+                        if (child.getClass().getName().contains("ViewPager2")) continue;
+
+                        boolean list = child.getHeight() > content.getHeight() / 2
+                                && (child.canScrollVertically(1) || child.canScrollVertically(-1));
+                        if (!list) {
+                            next.add((ViewGroup) child);
+                            continue;
+                        }
+                        child.getLocationInWindow(location);
+                        if (location[1] + child.getHeight() <= barTop) continue;
+
+                        Integer own = listPadding.get(child);
+                        if (own == null) {
+                            own = child.getPaddingBottom();
+                            listPadding.put(child, own);
+                        }
+                        if (child.getPaddingBottom() != own + tabBar.getHeight()) {
+                            child.setPadding(child.getPaddingLeft(), child.getPaddingTop(),
+                                    child.getPaddingRight(), own + tabBar.getHeight());
+                            ((ViewGroup) child).setClipToPadding(false);
+                        }
+                    }
+                }
+                level = next;
             }
+        }
+
+        private void restoreLists() {
+            if (listPadding.isEmpty()) return;
+            for (Map.Entry<View, Integer> entry : listPadding.entrySet()) {
+                View view = entry.getKey();
+                if (view != null) {
+                    view.setPadding(view.getPaddingLeft(), view.getPaddingTop(), view.getPaddingRight(), entry.getValue());
+                }
+            }
+            listPadding.clear();
         }
 
         /** Keeps a button that restarts Instagram at the bottom of the navigation rail. */
@@ -1172,6 +1265,13 @@ public final class ReelsFullscreenPatch {
                     view.setTranslationX(0f);
                     view.setTranslationY(0f);
                 }
+                iterator.remove();
+            }
+
+            for (Iterator<Map.Entry<View, Integer>> iterator = lifted.entrySet().iterator(); iterator.hasNext(); ) {
+                Map.Entry<View, Integer> entry = iterator.next();
+                if (!all && entry.getValue() == pass) continue;
+                if (entry.getKey() != null) entry.getKey().setTranslationY(0f);
                 iterator.remove();
             }
 
