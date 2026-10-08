@@ -1,3 +1,9 @@
+## [1.0.0-dev.14](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.13...v1.0.0-dev.14) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* Make the glass navigation bar look more like glass ([a40ca15](https://github.com/JacksonJones2003/Instagram-immersive/commit/a40ca150bb78f7c4b9a6c58aed5a961f0ed09b1e))
+
 ## [1.0.0-dev.13](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.12...v1.0.0-dev.13) (2026-10-08)
 
 ### ✨ New Features
