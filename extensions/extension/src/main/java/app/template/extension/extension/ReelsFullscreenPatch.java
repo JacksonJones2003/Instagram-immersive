@@ -106,7 +106,9 @@ public final class ReelsFullscreenPatch {
     private static final int RESTART_BUTTON_SIZE_DP = 48;
     // Holds the screen of the current tab, the tab bar sits next to it.
     private static final String CONTENT_ID = "layout_container_main";
-    private static final int MAX_BUTTONS_DEPTH = 4;
+    private static final int MAX_BUTTONS_DEPTH = 6;
+    // Buttons of one bar are about the same size.
+    private static final float MAX_BUTTON_SIZE_RATIO = 1.6f;
     private static final int MIN_BUTTONS = 3;
     private static final int GLASS_BLUR_DP = 20;
     // With edges that bend the picture the glass can be clearer.
@@ -480,6 +482,7 @@ public final class ReelsFullscreenPatch {
                 View rail = findNavigationRail(decor);
                 if (rail != null && rail.isShown() && rail.getWidth() > 0) {
                     if (railGlass == null) railGlass = new GlassBar(activity);
+                    railGlass.floating = true;
                     styleBar(railGlass, rail, content, true);
                 }
             } catch (Exception e) {
@@ -811,6 +814,15 @@ public final class ReelsFullscreenPatch {
         }
 
         private void styleBar(GlassBar glass, View bar, View behind, boolean ambient) {
+            // The glass is drawn by the view that holds the buttons. That view can sit inside the
+            // bar with a solid background of its own, which would hide anything drawn by the bar.
+            ViewGroup buttons = findButtons(bar);
+            if (buttons == null) {
+                glass.clear();
+                return;
+            }
+            bar = buttons;
+
             Drawable background = bar.getBackground();
             if (background != glass) {
                 // Instagram switches between a light and a dark bar, keep following that.
@@ -823,19 +835,7 @@ public final class ReelsFullscreenPatch {
                 }
                 bar.setBackground(glass);
             }
-
-            ViewGroup buttons = findButtons(bar);
-            if (buttons == null) {
-                glass.clear();
-                return;
-            }
-            float left = 0;
-            float top = 0;
-            for (View view = buttons; view != bar; view = (View) view.getParent()) {
-                left += view.getLeft();
-                top += view.getTop();
-            }
-            glass.layout(bar, buttons, left, top);
+            glass.layout(bar, buttons, 0, 0);
 
             if (behind == null || blurFailed || Build.VERSION.SDK_INT < 31 || glass.pill.isEmpty()) {
                 glass.blur = null;
@@ -864,7 +864,7 @@ public final class ReelsFullscreenPatch {
             }
         }
 
-        /** The buttons of a bar are the first group of at least three views inside it. */
+        /** The buttons of a bar are the first group of at least three views of about one size inside it. */
         private ViewGroup findButtons(View bar) {
             if (!(bar instanceof ViewGroup)) return null;
             List<ViewGroup> level = new ArrayList<>();
@@ -873,13 +873,25 @@ public final class ReelsFullscreenPatch {
                 List<ViewGroup> next = new ArrayList<>();
                 for (ViewGroup group : level) {
                     int shown = 0;
+                    int minWidth = Integer.MAX_VALUE;
+                    int maxWidth = 0;
+                    int minHeight = Integer.MAX_VALUE;
+                    int maxHeight = 0;
                     for (int i = 0; i < group.getChildCount(); i++) {
                         View child = group.getChildAt(i);
-                        if (child.getVisibility() != View.VISIBLE || child.getWidth() == 0) continue;
+                        if (child.getVisibility() != View.VISIBLE || child.getWidth() == 0
+                                || child.getHeight() == 0) continue;
                         shown++;
+                        minWidth = Math.min(minWidth, child.getWidth());
+                        maxWidth = Math.max(maxWidth, child.getWidth());
+                        minHeight = Math.min(minHeight, child.getHeight());
+                        maxHeight = Math.max(maxHeight, child.getHeight());
                         if (child instanceof ViewGroup) next.add((ViewGroup) child);
                     }
-                    if (shown >= MIN_BUTTONS) return group;
+                    if (shown >= MIN_BUTTONS && maxWidth <= MAX_BUTTON_SIZE_RATIO * minWidth
+                            && maxHeight <= MAX_BUTTON_SIZE_RATIO * minHeight) {
+                        return group;
+                    }
                 }
                 level = next;
             }
@@ -1547,6 +1559,10 @@ public final class ReelsFullscreenPatch {
             }
             View rail = findNavigationRail(decor);
             if (rail != null) {
+                ViewGroup railButtons = findButtons(rail);
+                builder.append("== rail buttons ");
+                if (railButtons == null) builder.append("not found\n");
+                else describe(builder, railButtons, "");
                 builder.append("== navigation rail\n");
                 describeTree(builder, rail, 0, new int[]{MAX_DUMP_LINES - 60});
             }
