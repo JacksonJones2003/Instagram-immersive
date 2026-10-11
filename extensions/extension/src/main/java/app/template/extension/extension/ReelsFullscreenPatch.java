@@ -568,20 +568,27 @@ public final class ReelsFullscreenPatch {
             if (select) barTap(x);
         }
 
-        /** Presses the button at a position the way a finger would. */
+        /** Whether a position on the tab bar is over the messages button. */
+        boolean barIsMessages(float x) {
+            View tabBar = lastTabBar.get();
+            return tabBar != null && messagesView != null && messagesView.getVisibility() == View.VISIBLE
+                    && isCreateButton(tabBar, buttonAt(tabBar, x));
+        }
+
+        void barOpenMessages() {
+            openMessages();
+        }
+
+        /** Presses the button a slide ended on, with a short touch in its middle. */
         void barTap(float x) {
             try {
-                View tabBar = lastTabBar.get();
+                final View tabBar = lastTabBar.get();
                 View button = tabBar == null ? null : buttonAt(tabBar, x);
                 if (button == null) return;
-                if (messagesView != null && messagesView.getVisibility() == View.VISIBLE
-                        && isCreateButton(tabBar, button)) {
+                if (barIsMessages(x)) {
                     openMessages();
                     return;
                 }
-
-                // Most buttons take a plain click, the others get a touch in their middle.
-                if (button.performClick()) return;
 
                 float centerX = button.getWidth() / 2f;
                 float centerY = button.getHeight() / 2f;
@@ -589,30 +596,41 @@ public final class ReelsFullscreenPatch {
                     centerX += view.getLeft();
                     centerY += view.getTop();
                 }
-                long now = SystemClock.uptimeMillis();
-                MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, centerX, centerY, 0);
-                MotionEvent up = MotionEvent.obtain(now, now + 40, MotionEvent.ACTION_UP, centerX, centerY, 0);
-                down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-                up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-                try {
-                    tabBar.dispatchTouchEvent(down);
-                    tabBar.dispatchTouchEvent(up);
-                } finally {
-                    down.recycle();
-                    up.recycle();
-                }
+                final float x0 = centerX;
+                final float y0 = centerY;
+                final long downTime = SystemClock.uptimeMillis();
+                barSend(tabBar, downTime, MotionEvent.ACTION_DOWN, x0, y0);
+                // A finger stays down for a moment, some buttons ignore anything shorter.
+                tabBar.postDelayed(() -> barSend(tabBar, downTime, MotionEvent.ACTION_UP, x0, y0), 60);
             } catch (Exception e) {
                 Log.e(TAG, "tab press failure", e);
             }
         }
 
-        /** Hands a touch on to Instagram's tab bar unchanged, used for long presses. */
-        void barForward(MotionEvent event) {
+        private void barSend(View tabBar, long downTime, int action, float x, float y) {
+            MotionEvent event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, x, y, 0);
+            event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            try {
+                tabBar.dispatchTouchEvent(event);
+            } catch (Exception e) {
+                Log.e(TAG, "tab touch failure", e);
+            } finally {
+                event.recycle();
+            }
+        }
+
+        /**
+         * Hands a touch on to Instagram's tab bar as it happens, so taps and long presses are
+         * handled by Instagram itself. The action can be replaced to call a touch off.
+         */
+        void barForward(MotionEvent event, int action) {
             View tabBar = lastTabBar.get();
             if (tabBar == null) return;
-            MotionEvent copy = MotionEvent.obtain(event);
-            // The touch area starts above the tab bar.
-            copy.offsetLocation(0, -barTouchExtra);
+            // The touch area starts above the tab bar, a touch up there counts as on its top edge.
+            float y = Math.max(2f, event.getY() - barTouchExtra);
+            MotionEvent copy = MotionEvent.obtain(event.getDownTime(), event.getEventTime(), action,
+                    event.getX(), y, event.getMetaState());
+            copy.setSource(InputDevice.SOURCE_TOUCHSCREEN);
             try {
                 tabBar.dispatchTouchEvent(copy);
             } catch (Exception e) {
@@ -2046,8 +2064,9 @@ public final class ReelsFullscreenPatch {
     }
 
     /**
-     * Sits on top of the tab bar and takes its touches: a tap presses the button under it,
-     * a slide moves the highlight along with the finger and presses the button it is let go on.
+     * Sits on top of the tab bar. Touches go straight on to Instagram's buttons underneath,
+     * until a finger slides sideways: then the highlight follows the finger and the button it
+     * is let go on gets pressed.
      */
     private static final class BarTouch extends View {
         private final State state;
@@ -2055,54 +2074,50 @@ public final class ReelsFullscreenPatch {
         private float downX;
         private boolean dragging;
         private boolean forwarding;
-        private MotionEvent downEvent;
-        private final Runnable longPress = () -> {
-            // Instagram has its own long presses, on the profile button for example.
-            if (dragging || downEvent == null) return;
-            forwarding = true;
-            BarTouch.this.state.barForward(downEvent);
-        };
+        private boolean overMessages;
 
         BarTouch(Context context, State state) {
             super(context);
             this.state = state;
-            slop = ViewConfiguration.get(context).getScaledTouchSlop();
+            // Fingers wobble during a tap, only a clear slide counts as one.
+            slop = ViewConfiguration.get(context).getScaledTouchSlop() * 2;
         }
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             float x = event.getX();
-            switch (event.getActionMasked()) {
+            int action = event.getActionMasked();
+            switch (action) {
                 case MotionEvent.ACTION_DOWN:
                     downX = x;
                     dragging = false;
-                    forwarding = false;
-                    if (downEvent != null) downEvent.recycle();
-                    downEvent = MotionEvent.obtain(event);
-                    postDelayed(longPress, ViewConfiguration.getLongPressTimeout());
+                    // The messages button is ours, Instagram's hidden create button sits under it.
+                    overMessages = state.barIsMessages(x);
+                    forwarding = !overMessages;
+                    if (forwarding) state.barForward(event, action);
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    if (forwarding) {
-                        state.barForward(event);
-                        return true;
-                    }
                     if (!dragging && Math.abs(x - downX) > slop) {
                         dragging = true;
-                        removeCallbacks(longPress);
+                        if (forwarding) state.barForward(event, MotionEvent.ACTION_CANCEL);
+                        forwarding = false;
                         if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
                     }
-                    if (dragging) state.barDrag(x);
+                    if (dragging) {
+                        state.barDrag(x);
+                    } else if (forwarding) {
+                        state.barForward(event, action);
+                    }
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    removeCallbacks(longPress);
-                    boolean lifted = event.getActionMasked() == MotionEvent.ACTION_UP;
-                    if (forwarding) {
-                        state.barForward(event);
-                    } else if (dragging) {
+                    boolean lifted = action == MotionEvent.ACTION_UP;
+                    if (dragging) {
                         state.barRelease(x, lifted);
-                    } else if (lifted) {
-                        state.barTap(x);
+                    } else if (forwarding) {
+                        state.barForward(event, action);
+                    } else if (overMessages && lifted) {
+                        state.barOpenMessages();
                     }
                     dragging = false;
                     forwarding = false;
