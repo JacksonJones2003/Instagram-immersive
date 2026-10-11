@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-11T07:01:36",
-  "description": "## [1.0.0-dev.24](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.23...v1.0.0-dev.24) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* Draw the glass pill of the navigation rail where its buttons are ([66f61f0](https://github.com/JacksonJones2003/Instagram-immersive/commit/66f61f08437ca22ffb1d0e2a741fda0ed79c9388))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.24/patches-1.0.0-dev.24.mpp",
+  "created_at": "2026-10-11T07:08:40",
+  "description": "## [1.0.0-dev.25](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.24...v1.0.0-dev.25) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* Navigation rail glass only picks up screen colors along its edge ([a02bdd1](https://github.com/JacksonJones2003/Instagram-immersive/commit/a02bdd1aed7442549cf499d645a185cf85b9ad0b))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.25/patches-1.0.0-dev.25.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.24"
+  "version": "1.0.0-dev.25"
 }

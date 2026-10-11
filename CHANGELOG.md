@@ -1,3 +1,9 @@
+## [1.0.0-dev.25](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.24...v1.0.0-dev.25) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Navigation rail glass only picks up screen colors along its edge ([a02bdd1](https://github.com/JacksonJones2003/Instagram-immersive/commit/a02bdd1aed7442549cf499d645a185cf85b9ad0b))
+
 ## [1.0.0-dev.24](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.23...v1.0.0-dev.24) (2026-10-11)
 
 ### 🐛 Bug Fixes
