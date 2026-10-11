@@ -14,6 +14,7 @@ import android.graphics.ColorFilter;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -109,9 +110,9 @@ public final class ReelsFullscreenPatch {
     private static final int MIN_BUTTONS = 3;
     private static final int GLASS_BLUR_DP = 20;
     // With edges that bend the picture the glass can be clearer.
-    private static final int GLASS_CLEAR_BLUR_DP = 9;
-    private static final int GLASS_EDGE_DP = 16;
-    private static final int GLASS_BEND_DP = 14;
+    private static final int GLASS_CLEAR_BLUR_DP = 8;
+    private static final int GLASS_EDGE_DP = 20;
+    private static final int GLASS_BEND_DP = 26;
     private static final String MESSAGES_LINK = "instagram://direct-inbox";
     // Line Instagram draws along the top of the tab bar.
     private static final String TAB_BAR_LINE_ID = "tab_bar_shadow";
@@ -1759,6 +1760,8 @@ public final class ReelsFullscreenPatch {
         private final float density;
         private Shader sheen;
         private Shader rim;
+        private Shader highlight;
+        private boolean highlightFailed;
         private boolean hasTarget;
         private boolean bubblePlaced;
         boolean light;
@@ -1828,6 +1831,15 @@ public final class ReelsFullscreenPatch {
                 rim = new LinearGradient(0, pill.top, 0, pill.bottom,
                         new int[]{0xB3FFFFFF, 0x26FFFFFF, 0x66FFFFFF},
                         new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP);
+                highlight = null;
+                if (Build.VERSION.SDK_INT >= 33 && !highlightFailed) {
+                    try {
+                        highlight = GlassBend.highlight(pill);
+                    } catch (Throwable e) {
+                        Log.e(TAG, "glass highlight failure", e);
+                        highlightFailed = true;
+                    }
+                }
             }
 
             boolean hadTarget = hasTarget;
@@ -1937,9 +1949,19 @@ public final class ReelsFullscreenPatch {
             }
 
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(1.25f * density);
             paint.setColor(Color.WHITE);
-            paint.setShader(rim);
+            if (highlight != null) {
+                // Faint outline all around, bright where the edge faces the light.
+                paint.setStrokeWidth(density);
+                paint.setColor(0x24FFFFFF);
+                canvas.drawRoundRect(pill, radius, radius, paint);
+                paint.setColor(Color.WHITE);
+                paint.setStrokeWidth(1.5f * density);
+                paint.setShader(highlight);
+            } else {
+                paint.setStrokeWidth(1.25f * density);
+                paint.setShader(rim);
+            }
             canvas.drawRoundRect(pill, radius, radius, paint);
             paint.setShader(null);
         }
@@ -2006,8 +2028,9 @@ public final class ReelsFullscreenPatch {
             if (Build.VERSION.SDK_INT >= 33 && !bendFailed) {
                 try {
                     float radius = Math.min(width, height) / 2f;
+                    // The middle of the pill has to stay outside the bending rim.
                     node.setRenderEffect(GlassBend.create(frosted(GLASS_CLEAR_BLUR_DP * density), width, height,
-                            radius, Math.min(radius, GLASS_EDGE_DP * density), GLASS_BEND_DP * density));
+                            radius, Math.min(radius * 0.8f, GLASS_EDGE_DP * density), GLASS_BEND_DP * density));
                     return;
                 } catch (Throwable e) {
                     Log.e(TAG, "glass bend failure", e);
@@ -2169,45 +2192,145 @@ public final class ReelsFullscreenPatch {
     }
 
     /**
-     * Bends what is seen through a pill of glass: the middle is left alone, towards the rim the
-     * picture is pulled outwards more and more and catches light. Needs Android 13.
+     * Bends what is seen through a pill of glass and lights its rim. Needs Android 13.
+     *
+     * The shaders are taken from KMPLiquidGlass (https://github.com/Kashif-E/KMPLiquidGlass),
+     * a port of AndroidLiquidGlass (https://github.com/Kyant0/AndroidLiquidGlass).
+     * Copyright 2025 Kyant, Kashif Mehmood. Licensed under the Apache License, Version 2.0.
      */
     private static final class GlassBend {
-        private static final String SHADER =
+        private static final String ROUNDED_RECT =
+                "float radiusAt(float2 coord, float4 radii) {\n"
+                + "    if (coord.x >= 0.0) {\n"
+                + "        if (coord.y <= 0.0) return radii.y;\n"
+                + "        else return radii.z;\n"
+                + "    } else {\n"
+                + "        if (coord.y <= 0.0) return radii.x;\n"
+                + "        else return radii.w;\n"
+                + "    }\n"
+                + "}\n"
+                + "float sdRoundedRect(float2 coord, float2 halfSize, float radius) {\n"
+                + "    float2 cornerCoord = abs(coord) - (halfSize - float2(radius));\n"
+                + "    float outside = length(max(cornerCoord, 0.0)) - radius;\n"
+                + "    float inside = min(max(cornerCoord.x, cornerCoord.y), 0.0);\n"
+                + "    return outside + inside;\n"
+                + "}\n"
+                + "float2 gradSdRoundedRect(float2 coord, float2 halfSize, float radius) {\n"
+                + "    float2 cornerCoord = abs(coord) - (halfSize - float2(radius));\n"
+                + "    if (cornerCoord.x >= 0.0 || cornerCoord.y >= 0.0) {\n"
+                + "        return sign(coord) * normalize(max(cornerCoord, 0.0));\n"
+                + "    } else {\n"
+                + "        float gradX = step(cornerCoord.y, cornerCoord.x);\n"
+                + "        return sign(coord) * float2(gradX, 1.0 - gradX);\n"
+                + "    }\n"
+                + "}\n";
+
+        /** Refraction along the rim, with the colors drawn slightly apart like through real glass. */
+        private static final String REFRACTION =
                 "uniform shader content;\n"
                 + "uniform float2 size;\n"
-                + "uniform float radius;\n"
-                + "uniform float edge;\n"
-                + "uniform float bend;\n"
-                // Distance to the outline of the pill, negative inside.
-                + "float outline(float2 p, float2 halfSize, float r) {\n"
-                + "    float2 q = abs(p) - halfSize + float2(r);\n"
-                + "    return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - r;\n"
+                + "uniform float2 offset;\n"
+                + "uniform float4 cornerRadii;\n"
+                + "uniform float refractionHeight;\n"
+                + "uniform float refractionAmount;\n"
+                + "uniform float depthEffect;\n"
+                + "uniform float chromaticAberration;\n"
+                + ROUNDED_RECT
+                + "float circleMap(float x) {\n"
+                + "    return 1.0 - sqrt(1.0 - x * x);\n"
                 + "}\n"
                 + "half4 main(float2 coord) {\n"
                 + "    float2 halfSize = size * 0.5;\n"
-                + "    float2 p = coord - halfSize;\n"
-                + "    float d = outline(p, halfSize, radius);\n"
-                + "    float rim = clamp(1.0 + d / edge, 0.0, 1.0);\n"
-                + "    float amount = rim * rim * rim;\n"
-                + "    float2 slope = float2(\n"
-                + "        outline(p + float2(1.0, 0.0), halfSize, radius) - outline(p - float2(1.0, 0.0), halfSize, radius),\n"
-                + "        outline(p + float2(0.0, 1.0), halfSize, radius) - outline(p - float2(0.0, 1.0), halfSize, radius));\n"
-                + "    float steep = length(slope);\n"
-                + "    float2 outward = steep > 0.0001 ? slope / steep : float2(0.0);\n"
-                + "    half4 color = content.eval(coord - outward * amount * bend);\n"
-                + "    color.rgb += half3(0.16 * amount);\n"
+                + "    float2 centeredCoord = (coord + offset) - halfSize;\n"
+                + "    float radius = radiusAt(coord, cornerRadii);\n"
+                + "    float sd = sdRoundedRect(centeredCoord, halfSize, radius);\n"
+                + "    if (-sd >= refractionHeight) {\n"
+                + "        return content.eval(coord);\n"
+                + "    }\n"
+                + "    sd = min(sd, 0.0);\n"
+                + "    float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;\n"
+                + "    float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));\n"
+                + "    float2 grad = normalize(gradSdRoundedRect(centeredCoord, halfSize, gradRadius)"
+                + " + depthEffect * normalize(centeredCoord));\n"
+                + "    float2 refractedCoord = coord + d * grad;\n"
+                + "    float dispersionIntensity = chromaticAberration"
+                + " * ((centeredCoord.x * centeredCoord.y) / (halfSize.x * halfSize.y));\n"
+                + "    float2 dispersedCoord = d * grad * dispersionIntensity;\n"
+                + "    half4 color = half4(0.0);\n"
+                + "    half4 red = content.eval(refractedCoord + dispersedCoord);\n"
+                + "    color.r += red.r / 3.5;\n"
+                + "    color.a += red.a / 7.0;\n"
+                + "    half4 orange = content.eval(refractedCoord + dispersedCoord * (2.0 / 3.0));\n"
+                + "    color.r += orange.r / 3.5;\n"
+                + "    color.g += orange.g / 7.0;\n"
+                + "    color.a += orange.a / 7.0;\n"
+                + "    half4 yellow = content.eval(refractedCoord + dispersedCoord * (1.0 / 3.0));\n"
+                + "    color.r += yellow.r / 3.5;\n"
+                + "    color.g += yellow.g / 3.5;\n"
+                + "    color.a += yellow.a / 7.0;\n"
+                + "    half4 green = content.eval(refractedCoord);\n"
+                + "    color.g += green.g / 3.5;\n"
+                + "    color.a += green.a / 7.0;\n"
+                + "    half4 cyan = content.eval(refractedCoord - dispersedCoord * (1.0 / 3.0));\n"
+                + "    color.g += cyan.g / 3.5;\n"
+                + "    color.b += cyan.b / 3.0;\n"
+                + "    color.a += cyan.a / 7.0;\n"
+                + "    half4 blue = content.eval(refractedCoord - dispersedCoord * (2.0 / 3.0));\n"
+                + "    color.b += blue.b / 3.0;\n"
+                + "    color.a += blue.a / 7.0;\n"
+                + "    half4 purple = content.eval(refractedCoord - dispersedCoord);\n"
+                + "    color.r += purple.r / 7.0;\n"
+                + "    color.b += purple.b / 3.0;\n"
+                + "    color.a += purple.a / 7.0;\n"
                 + "    return color;\n"
                 + "}\n";
 
+        /** Light on the parts of the outline that face it. */
+        private static final String HIGHLIGHT =
+                "uniform float2 size;\n"
+                + "uniform float4 cornerRadii;\n"
+                + "layout(color) uniform half4 color;\n"
+                + "uniform float angle;\n"
+                + "uniform float falloff;\n"
+                + ROUNDED_RECT
+                + "half4 main(float2 coord) {\n"
+                + "    float2 halfSize = size * 0.5;\n"
+                + "    float2 centeredCoord = coord - halfSize;\n"
+                + "    float radius = radiusAt(coord, cornerRadii);\n"
+                + "    float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));\n"
+                + "    float2 grad = gradSdRoundedRect(centeredCoord, halfSize, gradRadius);\n"
+                + "    float2 normal = float2(cos(angle), sin(angle));\n"
+                + "    float d = dot(grad, normal);\n"
+                + "    float intensity = pow(abs(d), falloff);\n"
+                + "    return color * intensity;\n"
+                + "}\n";
+
         static RenderEffect create(RenderEffect behind, int width, int height, float radius, float edge, float bend) {
-            RuntimeShader shader = new RuntimeShader(SHADER);
+            RuntimeShader shader = new RuntimeShader(REFRACTION);
             shader.setFloatUniform("size", width, height);
-            shader.setFloatUniform("radius", radius);
-            shader.setFloatUniform("edge", Math.max(1f, edge));
-            shader.setFloatUniform("bend", bend);
+            shader.setFloatUniform("offset", 0f, 0f);
+            shader.setFloatUniform("cornerRadii", radius, radius, radius, radius);
+            shader.setFloatUniform("refractionHeight", Math.max(1f, edge));
+            // Negative: the rim shows what lies further in.
+            shader.setFloatUniform("refractionAmount", -bend);
+            shader.setFloatUniform("depthEffect", 1f);
+            shader.setFloatUniform("chromaticAberration", 1f);
             return RenderEffect.createChainEffect(
                     RenderEffect.createRuntimeShaderEffect(shader, "content"), behind);
+        }
+
+        static Shader highlight(RectF pill) {
+            float radius = Math.min(pill.width(), pill.height()) / 2f;
+            RuntimeShader shader = new RuntimeShader(HIGHLIGHT);
+            shader.setFloatUniform("size", pill.width(), pill.height());
+            shader.setFloatUniform("cornerRadii", radius, radius, radius, radius);
+            shader.setColorUniform("color", 0xB3FFFFFF);
+            shader.setFloatUniform("angle", (float) Math.toRadians(45));
+            shader.setFloatUniform("falloff", 1f);
+            Matrix place = new Matrix();
+            place.setTranslate(pill.left, pill.top);
+            shader.setLocalMatrix(place);
+            return shader;
         }
     }
 }
