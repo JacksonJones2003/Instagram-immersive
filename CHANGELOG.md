@@ -1,3 +1,9 @@
+## [1.0.0-dev.27](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.26...v1.0.0-dev.27) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Smooth, spring driven glass bars that leave taps to Instagram and stay put in Reels ([3792c37](https://github.com/JacksonJones2003/Instagram-immersive/commit/3792c378011e915bbe401662791f703780b782b6))
+
 ## [1.0.0-dev.26](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.25...v1.0.0-dev.26) (2026-10-11)
 
 ### ✨ New Features
