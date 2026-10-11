@@ -119,6 +119,8 @@ public final class ReelsFullscreenPatch {
     private static final float HOVER_SCALE = 1.18f;
     // The tab bar also takes touches this far above itself.
     private static final int BAR_TOUCH_EXTRA_DP = 16;
+    // How far the floating tab bar sits above the bottom of the screen.
+    private static final int BAR_RAISE_DP = 14;
     private static final int MAX_LIFT_DEPTH = 8;
     private static final int MAX_LIST_DEPTH = 12;
     private static final int LIST_SEARCH_INTERVAL = 20;
@@ -275,6 +277,9 @@ public final class ReelsFullscreenPatch {
         private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
         private boolean hovering;
         private int barTouchExtra;
+        private boolean barRaised;
+        /** Button of the tab bar that the messages button stands in for. */
+        private WeakReference<View> createSlot = new WeakReference<>(null);
         /** Parts of a reel that were moved above the floating tab bar, with their last pass. */
         private final Map<View, Integer> lifted = new WeakHashMap<>();
         /** Lists that got room to scroll clear of the floating tab bar, with their own bottom padding. */
@@ -447,9 +452,14 @@ public final class ReelsFullscreenPatch {
                     floatContent(content, tabBar, decor);
                     styleBar(tabGlass, tabBar, tabGlass.floating ? content : null, false);
                     if (tabGlass.floating) {
-                        floatLift = tabBar.getHeight();
-                        insetLists(content, tabBar);
+                        int raise = Math.round(BAR_RAISE_DP * activity.getResources().getDisplayMetrics().density);
+                        tabBar.setTranslationY(-raise);
+                        barRaised = true;
+                        floatLift = tabBar.getHeight() + raise;
+                        insetLists(content, tabBar, floatLift);
                     } else {
+                        if (barRaised) tabBar.setTranslationY(0f);
+                        barRaised = false;
                         restoreLists();
                     }
 
@@ -533,8 +543,7 @@ public final class ReelsFullscreenPatch {
         }
 
         private boolean isCreateButton(View tabBar, View button) {
-            ViewGroup buttons = messagesTab ? findButtons(tabBar) : null;
-            return buttons != null && button != null && findCreateButton(buttons, true) == button;
+            return messagesTab && button != null && createSlot.get() == button;
         }
 
         /** The button under a sliding finger grows, like under a lens. */
@@ -686,7 +695,38 @@ public final class ReelsFullscreenPatch {
 
                 View tabBar = findTabBar(decor);
                 ViewGroup buttons = tabBar != null && tabBar.isShown() ? findButtons(tabBar) : null;
-                View create = buttons == null ? null : findCreateButton(buttons, true);
+                View create = null;
+                if (buttons != null) {
+                    View named = null;
+                    boolean hasMessages = false;
+                    List<View> shown = new ArrayList<>();
+                    for (int i = 0; i < buttons.getChildCount(); i++) {
+                        View child = buttons.getChildAt(i);
+                        boolean visible = child.getVisibility() == View.VISIBLE && child.getWidth() > 0;
+                        String name = idName(child);
+                        if (name.contains("creation") || name.contains("create")) {
+                            named = child;
+                        } else if (visible && (name.contains("direct") || name.contains("message")
+                                || name.contains("inbox"))) {
+                            hasMessages = true;
+                        }
+                        if (visible) shown.add(child);
+                    }
+                    if (hasMessages) {
+                        // Newer tab bars come with a messages button, only the create button has to go.
+                        if (named != null && named.getVisibility() == View.VISIBLE) {
+                            named.setVisibility(View.GONE);
+                            layoutChanged = true;
+                        }
+                    } else if (named != null) {
+                        // A hidden create button is brought back as a place for the messages button
+                        // when the bar is one button short.
+                        if (named.getVisibility() == View.VISIBLE || shown.size() % 2 == 0) create = named;
+                    } else if (shown.size() % 2 == 1) {
+                        create = shown.get(shown.size() / 2);
+                    }
+                }
+                createSlot = new WeakReference<>(create);
                 if (create == null || !(tabBar.getParent() instanceof ViewGroup)) {
                     if (messagesView != null) messagesView.setVisibility(View.GONE);
                     return;
@@ -726,8 +766,8 @@ public final class ReelsFullscreenPatch {
                     left += view.getLeft();
                     top += view.getTop();
                 }
-                messagesView.setTranslationX(left);
-                messagesView.setTranslationY(top);
+                messagesView.setTranslationX(left + tabBar.getTranslationX());
+                messagesView.setTranslationY(top + tabBar.getTranslationY());
                 messagesView.setVisibility(View.VISIBLE);
 
                 boolean night = (activity.getResources().getConfiguration().uiMode
@@ -855,7 +895,7 @@ public final class ReelsFullscreenPatch {
         }
 
         /** Lists end underneath the floating tab bar, they get room to scroll their end clear of it. */
-        private void insetLists(View content, View tabBar) {
+        private void insetLists(View content, View tabBar, int room) {
             if (!(content instanceof ViewGroup) || listSearches++ % LIST_SEARCH_INTERVAL != 0) return;
             int[] location = new int[2];
             tabBar.getLocationInWindow(location);
@@ -886,9 +926,9 @@ public final class ReelsFullscreenPatch {
                             own = child.getPaddingBottom();
                             listPadding.put(child, own);
                         }
-                        if (child.getPaddingBottom() != own + tabBar.getHeight()) {
+                        if (child.getPaddingBottom() != own + room) {
                             child.setPadding(child.getPaddingLeft(), child.getPaddingTop(),
-                                    child.getPaddingRight(), own + tabBar.getHeight());
+                                    child.getPaddingRight(), own + room);
                             ((ViewGroup) child).setClipToPadding(false);
                         }
                     }
