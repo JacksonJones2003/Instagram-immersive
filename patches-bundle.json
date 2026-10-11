@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-11T06:26:51",
-  "description": "## [1.0.0-dev.19](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.18...v1.0.0-dev.19) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* Let Instagram handle taps on the glass tab bar itself ([404fc83](https://github.com/JacksonJones2003/Instagram-immersive/commit/404fc83e0c1d418991df996c340a63934ddaece0))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.19/patches-1.0.0-dev.19.mpp",
+  "created_at": "2026-10-11T06:30:29",
+  "description": "## [1.0.0-dev.20](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.19...v1.0.0-dev.20) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* No second messages button on tab bars that have one, raise the glass tab bar ([06eebe2](https://github.com/JacksonJones2003/Instagram-immersive/commit/06eebe27385ae07a6d05a57ef34f6348fe70a670))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.20/patches-1.0.0-dev.20.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.19"
+  "version": "1.0.0-dev.20"
 }

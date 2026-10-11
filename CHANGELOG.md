@@ -1,3 +1,9 @@
+## [1.0.0-dev.20](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.19...v1.0.0-dev.20) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* No second messages button on tab bars that have one, raise the glass tab bar ([06eebe2](https://github.com/JacksonJones2003/Instagram-immersive/commit/06eebe27385ae07a6d05a57ef34f6348fe70a670))
+
 ## [1.0.0-dev.19](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.18...v1.0.0-dev.19) (2026-10-11)
 
 ### 🐛 Bug Fixes
