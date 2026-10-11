@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-11T06:15:36",
-  "description": "## [1.0.0-dev.18](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.17...v1.0.0-dev.18) (2026-10-11)\n\n### ✨ New Features\n\n* Bend the picture along the edges of the glass bars ([53c6260](https://github.com/JacksonJones2003/Instagram-immersive/commit/53c6260dab1f53c1449c26a8dbf6b7387b954552))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.18/patches-1.0.0-dev.18.mpp",
+  "created_at": "2026-10-11T06:26:51",
+  "description": "## [1.0.0-dev.19](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.18...v1.0.0-dev.19) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* Let Instagram handle taps on the glass tab bar itself ([404fc83](https://github.com/JacksonJones2003/Instagram-immersive/commit/404fc83e0c1d418991df996c340a63934ddaece0))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.19/patches-1.0.0-dev.19.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.18"
+  "version": "1.0.0-dev.19"
 }

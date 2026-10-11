@@ -1,3 +1,9 @@
+## [1.0.0-dev.19](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.18...v1.0.0-dev.19) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Let Instagram handle taps on the glass tab bar itself ([404fc83](https://github.com/JacksonJones2003/Instagram-immersive/commit/404fc83e0c1d418991df996c340a63934ddaece0))
+
 ## [1.0.0-dev.18](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.17...v1.0.0-dev.18) (2026-10-11)
 
 ### ✨ New Features
