@@ -1,3 +1,9 @@
+## [1.0.0-dev.23](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.22...v1.0.0-dev.23) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Stop cutting off reel captions on phone screens and thin out the glass edge ([367e862](https://github.com/JacksonJones2003/Instagram-immersive/commit/367e862a93bfcf4fc59ab8e273e2caf5b701018a))
+
 ## [1.0.0-dev.22](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.21...v1.0.0-dev.22) (2026-10-11)
 
 ### 🐛 Bug Fixes
