@@ -1,3 +1,9 @@
+## [1.0.0-dev.26](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.25...v1.0.0-dev.26) (2026-10-11)
+
+### ✨ New Features
+
+* Glass bars behave like a lens under a finger and a well at rest, on the tab bar and the navigation rail ([190911e](https://github.com/JacksonJones2003/Instagram-immersive/commit/190911ec84bb2901c088a3bcaa5f08a858cb460a))
+
 ## [1.0.0-dev.25](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.24...v1.0.0-dev.25) (2026-10-11)
 
 ### 🐛 Bug Fixes
