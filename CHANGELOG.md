@@ -1,3 +1,9 @@
+## [1.0.0-dev.24](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.23...v1.0.0-dev.24) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Draw the glass pill of the navigation rail where its buttons are ([66f61f0](https://github.com/JacksonJones2003/Instagram-immersive/commit/66f61f08437ca22ffb1d0e2a741fda0ed79c9388))
+
 ## [1.0.0-dev.23](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.22...v1.0.0-dev.23) (2026-10-11)
 
 ### 🐛 Bug Fixes

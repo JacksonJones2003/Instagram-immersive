@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-11T06:51:22",
-  "description": "## [1.0.0-dev.23](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.22...v1.0.0-dev.23) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* Stop cutting off reel captions on phone screens and thin out the glass edge ([367e862](https://github.com/JacksonJones2003/Instagram-immersive/commit/367e862a93bfcf4fc59ab8e273e2caf5b701018a))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.23/patches-1.0.0-dev.23.mpp",
+  "created_at": "2026-10-11T07:01:36",
+  "description": "## [1.0.0-dev.24](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.23...v1.0.0-dev.24) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* Draw the glass pill of the navigation rail where its buttons are ([66f61f0](https://github.com/JacksonJones2003/Instagram-immersive/commit/66f61f08437ca22ffb1d0e2a741fda0ed79c9388))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.24/patches-1.0.0-dev.24.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.23"
+  "version": "1.0.0-dev.24"
 }
