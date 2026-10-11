@@ -1,3 +1,9 @@
+## [1.0.0-dev.18](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.17...v1.0.0-dev.18) (2026-10-11)
+
+### ✨ New Features
+
+* Bend the picture along the edges of the glass bars ([53c6260](https://github.com/JacksonJones2003/Instagram-immersive/commit/53c6260dab1f53c1449c26a8dbf6b7387b954552))
+
 ## [1.0.0-dev.17](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.16...v1.0.0-dev.17) (2026-10-08)
 
 ### 🐛 Bug Fixes
