@@ -122,7 +122,6 @@ public final class ReelsFullscreenPatch {
     private static final int BAR_TOUCH_EXTRA_DP = 16;
     // How far the floating tab bar sits above the bottom of the screen.
     private static final int BAR_RAISE_DP = 14;
-    private static final int MAX_LIFT_DEPTH = 8;
     private static final int MAX_LIST_DEPTH = 12;
     private static final int LIST_SEARCH_INTERVAL = 20;
     private static final int RESTART_BUTTON_MARGIN_DP = 12;
@@ -281,8 +280,6 @@ public final class ReelsFullscreenPatch {
         private boolean barRaised;
         /** Button of the tab bar that the messages button stands in for. */
         private WeakReference<View> createSlot = new WeakReference<>(null);
-        /** Parts of a reel that were moved above the floating tab bar, with their last pass. */
-        private final Map<View, Integer> lifted = new WeakHashMap<>();
         /** Lists that got room to scroll clear of the floating tab bar, with their own bottom padding. */
         private final Map<View, Integer> listPadding = new WeakHashMap<>();
         private int listSearches;
@@ -569,6 +566,25 @@ public final class ReelsFullscreenPatch {
             }
         }
 
+        /** A finger went down on the tab bar: the highlight goes to the button under it at once. */
+        void barPress(float x) {
+            View tabBar = lastTabBar.get();
+            View button = tabBar == null || tabGlass == null ? null : buttonAt(tabBar, x);
+            if (button == null) return;
+            float center = button.getWidth() / 2f;
+            for (View view = button; view != tabBar; view = (View) view.getParent()) center += view.getLeft();
+            tabGlass.press(center);
+        }
+
+        void barUnpress() {
+            if (tabGlass == null) return;
+            tabGlass.unpress();
+            // The highlight waits a moment for Instagram to switch tabs, then needs one more frame
+            // to go back if it did not.
+            final View tabBar = lastTabBar.get();
+            if (tabBar != null) tabBar.postDelayed(tabBar::invalidate, GlassBar.HOLD_MS + 20);
+        }
+
         void barDrag(float x) {
             if (tabGlass != null) tabGlass.drag(x);
         }
@@ -576,6 +592,8 @@ public final class ReelsFullscreenPatch {
         void barRelease(float x, boolean select) {
             if (tabGlass != null) tabGlass.release();
             if (select) barTap(x);
+            final View tabBar = lastTabBar.get();
+            if (tabBar != null) tabBar.postDelayed(tabBar::invalidate, GlassBar.HOLD_MS + 20);
         }
 
         /** Whether a position on the tab bar is over the messages button. */
@@ -865,36 +883,6 @@ public final class ReelsFullscreenPatch {
             return null;
         }
 
-        /**
-         * A reel runs underneath the floating tab bar. Everything in the lower part of the page
-         * that is not the video itself, like the caption and the buttons, moves up above the bar.
-         */
-        private void lift(ViewGroup content) {
-            float pageScale = content.getScaleY();
-            if (pageScale <= 0 || content.getHeight() == 0) return;
-            liftChildren(content, 0, content.getHeight(), -floatLift / pageScale, 0);
-        }
-
-        private void liftChildren(ViewGroup group, float groupTop, int pageHeight, float shift, int depth) {
-            for (int i = 0; i < group.getChildCount(); i++) {
-                View child = group.getChildAt(i);
-                if (child.getVisibility() != View.VISIBLE || child.getHeight() == 0) continue;
-                // Expanded photos size and place their own parts.
-                if (child.getScaleY() != 1f) continue;
-
-                float top = groupTop + child.getTop();
-                float bottom = top + child.getHeight();
-                // Tall views and views that start high up hold the video or other parts.
-                boolean holder = child.getHeight() > 0.6f * pageHeight || top < 0.4f * pageHeight;
-                if (!holder) {
-                    child.setTranslationY(shift);
-                    lifted.put(child, pass);
-                } else if (child instanceof ViewGroup && depth < MAX_LIFT_DEPTH && bottom > pageHeight - floatLift) {
-                    liftChildren((ViewGroup) child, top, pageHeight, shift, depth + 1);
-                }
-            }
-        }
-
         /** Lists end underneath the floating tab bar, they get room to scroll their end clear of it. */
         private void insetLists(View content, View tabBar, int room) {
             if (!(content instanceof ViewGroup) || listSearches++ % LIST_SEARCH_INTERVAL != 0) return;
@@ -1037,10 +1025,12 @@ public final class ReelsFullscreenPatch {
          * that keep it clear of the status bar, the navigation bar and the tab bar.
          */
         private void expand(View reels, View decor, int top, int bottom) {
-            // Spacing Instagram keeps below the reel pages.
-            if (reels.getPaddingBottom() > 0) {
-                rememberPadding(reels, false, true);
-                reels.setPadding(reels.getPaddingLeft(), reels.getPaddingTop(), reels.getPaddingRight(), 0);
+            // Instagram keeps some spacing below the reel pages, that goes. Under a floating tab bar
+            // the pages end above the bar instead: Instagram lays a page out for its own height and
+            // puts the caption and buttons at its bottom, where the bar would cover them.
+            if (reels.getPaddingBottom() != floatLift) {
+                if (!originalPadding.containsKey(reels)) rememberPadding(reels, false, true);
+                reels.setPadding(reels.getPaddingLeft(), reels.getPaddingTop(), reels.getPaddingRight(), floatLift);
                 changed = true;
             }
 
@@ -1139,7 +1129,6 @@ public final class ReelsFullscreenPatch {
                 if (expandMedia) enlarge((ViewGroup) content);
                 if (moveButtons) moveButtons((ViewGroup) content);
                 if (railShown) fade((ViewGroup) content);
-                if (floatLift > 0) lift((ViewGroup) content);
             }
             // Instagram reuses these views for other reels, anything not confirmed in this pass
             // must not keep its changes.
@@ -1329,13 +1318,6 @@ public final class ReelsFullscreenPatch {
                     view.setTranslationX(0f);
                     view.setTranslationY(0f);
                 }
-                iterator.remove();
-            }
-
-            for (Iterator<Map.Entry<View, Integer>> iterator = lifted.entrySet().iterator(); iterator.hasNext(); ) {
-                Map.Entry<View, Integer> entry = iterator.next();
-                if (!all && entry.getValue() == pass) continue;
-                if (entry.getKey() != null) entry.getKey().setTranslationY(0f);
                 iterator.remove();
             }
 
@@ -1766,8 +1748,12 @@ public final class ReelsFullscreenPatch {
         private boolean bubblePlaced;
         boolean light;
         boolean floating;
+        /** How long the highlight stays where a finger left it, for Instagram to switch tabs. */
+        static final long HOLD_MS = 400;
         boolean dragging;
         float dragX;
+        private boolean pressed;
+        private long holdUntil;
         /** A GlassBlur, only on Android versions that have it. */
         Object blur;
 
@@ -1775,7 +1761,20 @@ public final class ReelsFullscreenPatch {
             density = context.getResources().getDisplayMetrics().density;
         }
 
+        void press(float x) {
+            pressed = true;
+            dragX = x;
+            invalidateSelf();
+        }
+
+        void unpress() {
+            pressed = false;
+            holdUntil = SystemClock.uptimeMillis() + HOLD_MS;
+            invalidateSelf();
+        }
+
         void drag(float x) {
+            pressed = false;
             dragging = true;
             dragX = x;
             invalidateSelf();
@@ -1783,7 +1782,13 @@ public final class ReelsFullscreenPatch {
 
         void release() {
             dragging = false;
+            holdUntil = SystemClock.uptimeMillis() + HOLD_MS;
             invalidateSelf();
+        }
+
+        /** Whether a finger is on the bar. */
+        private boolean touched() {
+            return dragging || pressed;
         }
 
         void clear() {
@@ -1843,8 +1848,11 @@ public final class ReelsFullscreenPatch {
             }
 
             boolean hadTarget = hasTarget;
-            hasTarget = selected != null || (dragging && horizontal);
-            if (dragging && horizontal) {
+            // Under a finger, and for a moment after it lifts, the highlight is where the finger was.
+            boolean held = horizontal && (touched() || SystemClock.uptimeMillis() < holdUntil);
+            if (!held) holdUntil = 0;
+            hasTarget = selected != null || held;
+            if (held) {
                 // The highlight follows the finger instead of the selected button.
                 float inset = 4 * density;
                 float width = selected != null ? selected.getWidth() - 2 * inset : pill.width() / 5f;
@@ -1914,7 +1922,7 @@ public final class ReelsFullscreenPatch {
             paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
             if (blurred) {
-                paint.setColor(light ? 0x38FFFFFF : 0x2E000000);
+                paint.setColor(light ? 0x38FFFFFF : 0x61000000);
             } else if (floating) {
                 paint.setColor(light ? 0x99FFFFFF : 0x8C1C1C1E);
             } else {
@@ -1933,17 +1941,17 @@ public final class ReelsFullscreenPatch {
                 float bubbleRadius = Math.min(bubble.width(), bubble.height()) / 2f;
                 // The highlight is a lens: what is behind the bar shows through it enlarged.
                 if (blurred) {
-                    ((GlassBlur) blur).lens(canvas, pill, bubble, bubbleRadius, dragging ? 1.35f : 1.12f);
+                    ((GlassBlur) blur).lens(canvas, pill, bubble, bubbleRadius, touched() ? 1.35f : 1.12f);
                 }
-                if (dragging) {
+                if (touched()) {
                     paint.setColor(light ? 0x2E000000 : 0x4DFFFFFF);
                 } else {
                     paint.setColor(light ? 0x24000000 : 0x38FFFFFF);
                 }
                 canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth((dragging ? 1.5f : 1f) * density);
-                paint.setColor(dragging ? 0x99FFFFFF : 0x59FFFFFF);
+                paint.setStrokeWidth((touched() ? 1.5f : 1f) * density);
+                paint.setColor(touched() ? 0x99FFFFFF : 0x59FFFFFF);
                 canvas.drawRoundRect(bubble, bubbleRadius, bubbleRadius, paint);
                 if (moved > 0.5f) invalidateSelf();
             }
@@ -1968,7 +1976,7 @@ public final class ReelsFullscreenPatch {
 
         private float glide() {
             // Stay close to a finger, ease over to a tapped button.
-            float pace = dragging ? 0.55f : 0.3f;
+            float pace = touched() ? 0.55f : 0.3f;
             float left = (target.left - bubble.left) * pace;
             float top = (target.top - bubble.top) * pace;
             float right = (target.right - bubble.right) * pace;
@@ -2157,6 +2165,7 @@ public final class ReelsFullscreenPatch {
                     // The messages button is ours, Instagram's hidden create button sits under it.
                     overMessages = state.barIsMessages(x);
                     forwarding = !overMessages;
+                    state.barPress(x);
                     if (forwarding) state.barForward(event, action);
                     return true;
                 case MotionEvent.ACTION_MOVE:
@@ -2175,6 +2184,7 @@ public final class ReelsFullscreenPatch {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     boolean lifted = action == MotionEvent.ACTION_UP;
+                    if (!dragging) state.barUnpress();
                     if (dragging) {
                         state.barRelease(x, lifted);
                     } else if (forwarding) {
