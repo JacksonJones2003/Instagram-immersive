@@ -483,6 +483,7 @@ public final class ReelsFullscreenPatch {
                 if (rail != null && rail.isShown() && rail.getWidth() > 0) {
                     if (railGlass == null) railGlass = new GlassBar(activity);
                     railGlass.floating = true;
+                    railGlass.ambient = true;
                     styleBar(railGlass, rail, content, true);
                 }
             } catch (Exception e) {
@@ -1786,6 +1787,9 @@ public final class ReelsFullscreenPatch {
         private boolean bubblePlaced;
         boolean light;
         boolean floating;
+        /** Next to the screen instead of over it: only the edge picks up its colors. */
+        boolean ambient;
+        private final RectF inner = new RectF();
         /** How long the highlight stays where a finger left it, for Instagram to switch tabs. */
         static final long HOLD_MS = 400;
         boolean dragging;
@@ -1952,14 +1956,26 @@ public final class ReelsFullscreenPatch {
             }
 
             boolean blurred = false;
-            if (blur != null && Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated()) {
+            boolean canBlur = blur != null && Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated();
+            if (canBlur && !ambient) {
                 blurred = ((GlassBlur) blur).draw(canvas, pill, radius);
             }
 
             // Thin tint, the blur and the highlights are what make it read as glass.
             paint.setShader(null);
             paint.setStyle(Paint.Style.FILL);
-            if (blurred) {
+            if (ambient) {
+                // Plain dark glass. Nothing is behind this pill, a picture inside it would be made up.
+                paint.setColor(light ? 0x1F000000 : 0x26FFFFFF);
+                canvas.drawRoundRect(pill, radius, radius, paint);
+                // Its rim catches a little of the colors of the screen next to it,
+                // fading out a few pixels in.
+                if (canBlur) {
+                    glow(canvas, radius, 2.5f * density, 120);
+                    glow(canvas, radius, 6f * density, 55);
+                }
+                paint.setColor(0);
+            } else if (blurred) {
                 paint.setColor(light ? 0x38FFFFFF : 0x61000000);
             } else if (floating) {
                 paint.setColor(light ? 0x99FFFFFF : 0x8C1C1C1E);
@@ -1978,7 +1994,7 @@ public final class ReelsFullscreenPatch {
                 float moved = glide();
                 float bubbleRadius = Math.min(bubble.width(), bubble.height()) / 2f;
                 // The highlight is a lens: what is behind the bar shows through it enlarged.
-                if (blurred) {
+                if (blurred && !ambient) {
                     ((GlassBlur) blur).lens(canvas, pill, bubble, bubbleRadius, touched() ? 1.35f : 1.12f);
                 }
                 if (touched()) {
@@ -2010,6 +2026,20 @@ public final class ReelsFullscreenPatch {
             }
             canvas.drawRoundRect(pill, radius, radius, paint);
             paint.setShader(null);
+        }
+
+        /** Draws the colors of the screen in a ring of the given width along the edge of the pill. */
+        private void glow(Canvas canvas, float radius, float width, int alpha) {
+            inner.set(pill);
+            inner.inset(width, width);
+            if (inner.isEmpty()) return;
+            float innerRadius = Math.min(inner.width(), inner.height()) / 2f;
+            outline.rewind();
+            outline.addRoundRect(inner, innerRadius, innerRadius, Path.Direction.CW);
+            canvas.saveLayerAlpha(pill.left, pill.top, pill.right, pill.bottom, alpha);
+            canvas.clipOutPath(outline);
+            ((GlassBlur) blur).draw(canvas, pill, radius);
+            canvas.restore();
         }
 
         private float glide() {
