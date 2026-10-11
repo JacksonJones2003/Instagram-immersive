@@ -1,3 +1,9 @@
+## [1.0.0-dev.28](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.27...v1.0.0-dev.28) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Move the glass bars on with every frame of the screen so tab changes glide ([4e51d56](https://github.com/JacksonJones2003/Instagram-immersive/commit/4e51d56620cb6094e877adc9df84b39478c4a8c0))
+
 ## [1.0.0-dev.27](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.26...v1.0.0-dev.27) (2026-10-11)
 
 ### 🐛 Bug Fixes
