@@ -35,6 +35,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.PixelCopy;
@@ -129,7 +130,7 @@ public final class ReelsFullscreenPatch {
     // How much the button under the finger grows while sliding over the tab bar.
     private static final float HOVER_SCALE = 1.18f;
     // The rim of the navigation rail takes its colors from the screen this often, in small samples.
-    private static final long AMBIENT_INTERVAL_MS = 140;
+    private static final long AMBIENT_INTERVAL_MS = 900;
     private static final int AMBIENT_COLUMNS = 8;
     private static final int AMBIENT_ROWS = 40;
     // How far the floating tab bar sits above the bottom of the screen.
@@ -622,13 +623,6 @@ public final class ReelsFullscreenPatch {
             return center;
         }
 
-        private void settleLater(boolean rail) {
-            // The lens waits for Instagram to switch tabs. Should that not happen, it needs one
-            // more frame to go back.
-            final View host = barHost(rail);
-            if (host != null) host.postDelayed(host::invalidate, GlassBar.HOLD_MS + 20);
-        }
-
         /** A finger went down on a bar: the lens rises and goes to the button under it. */
         private void barPress(boolean rail, float position) {
             View host = barHost(rail);
@@ -641,7 +635,6 @@ public final class ReelsFullscreenPatch {
             GlassBar glass = barGlass(rail);
             if (glass == null) return;
             glass.unpress();
-            settleLater(rail);
         }
 
         private void barDrag(boolean rail, float position) {
@@ -658,7 +651,6 @@ public final class ReelsFullscreenPatch {
                 glass.release(button == null ? position : buttonCenter(host, button, rail));
             }
             if (select) barTap(rail, position);
-            settleLater(rail);
         }
 
         /** Presses the button a slide ended on the way a finger would: with a touch on the window. */
@@ -828,6 +820,8 @@ public final class ReelsFullscreenPatch {
          */
         private void captureAmbient(final GlassBar glass, final View host, View rail, View decor) {
             if (Build.VERSION.SDK_INT < 26 || ambientPending || glass.pill.isEmpty()) return;
+            // Reading the screen back costs the renderer a moment, not while the glass is moving.
+            if (glass.isBusy()) return;
             long now = SystemClock.uptimeMillis();
             if (now - ambientTime < AMBIENT_INTERVAL_MS) return;
 
@@ -2059,12 +2053,16 @@ public final class ReelsFullscreenPatch {
      *
      * The selected button sits in a dark well. Under a finger the well rises into a clear lens
      * that is larger than the pill, follows the finger, stretches while it moves and sinks back
-     * into a well on the button it is let go on. Every part of that moves on springs that run on
-     * the clock, so it looks the same at any frame rate.
+     * into a well on the button it is let go on. Every part of that moves on springs.
+     *
+     * The springs are moved on once for every frame of the screen, by the clock of the screen
+     * itself, for as long as anything is moving. Nothing else has to cause a frame for that.
      */
     private static final class GlassBar extends Drawable {
         /** How long at most the lens waits where a finger left it for Instagram to switch tabs. */
         static final long HOLD_MS = 400;
+        /** New colors along the rim take this long to replace the old ones. */
+        private static final long GLOW_FADE_MS = 500;
         private static final int LEFT = 0;
         private static final int TOP = 1;
         private static final int RIGHT = 2;
@@ -2116,7 +2114,11 @@ public final class ReelsFullscreenPatch {
         private float lift;
         private float liftSpeed;
         private boolean forward = true;
-        private long lastFrame;
+
+        /** Whether the clock of the screen is moving this bar on at the moment. */
+        private boolean ticking;
+        private long lastTick;
+        private final Choreographer.FrameCallback ticker = this::tick;
 
         GlassBar(Context context) {
             density = context.getResources().getDisplayMetrics().density;
@@ -2125,27 +2127,57 @@ public final class ReelsFullscreenPatch {
         void press(float position) {
             pressed = true;
             this.position = position;
-            invalidateSelf();
+            wake();
         }
 
         void unpress() {
             pressed = false;
             holdUntil = SystemClock.uptimeMillis() + HOLD_MS;
-            invalidateSelf();
+            wake();
         }
 
         void drag(float position) {
             pressed = false;
             dragging = true;
             this.position = position;
-            invalidateSelf();
+            wake();
         }
 
         void release(float position) {
             dragging = false;
             this.position = position;
             holdUntil = SystemClock.uptimeMillis() + HOLD_MS;
+            wake();
+        }
+
+        /** Whether the bar is being moved on frame by frame right now. */
+        boolean isBusy() {
+            return ticking;
+        }
+
+        /** Starts moving the bar on with every frame of the screen, until it has come to rest. */
+        private void wake() {
             invalidateSelf();
+            if (ticking) return;
+            ticking = true;
+            lastTick = 0;
+            Choreographer.getInstance().postFrameCallback(ticker);
+        }
+
+        private void tick(long frameTime) {
+            float elapsed = lastTick == 0 ? 1f / 120f : Math.min(0.034f, (frameTime - lastTick) / 1e9f);
+            lastTick = frameTime;
+
+            boolean moving = hasTarget && !pill.isEmpty() && animate(elapsed, isTouched() || holdUntil != 0);
+            boolean fading = glowOld != null && SystemClock.uptimeMillis() - glowSince < GLOW_FADE_MS;
+            invalidateSelf();
+            // While a finger is down or the lens waits for Instagram, frames have to keep coming
+            // even when the springs are at rest: that is how the wait is noticed to be over.
+            if (moving || fading || isTouched() || holdUntil != 0) {
+                Choreographer.getInstance().postFrameCallback(ticker);
+            } else {
+                ticking = false;
+            }
         }
 
         /** Whether a finger is on the bar. */
@@ -2162,7 +2194,7 @@ public final class ReelsFullscreenPatch {
             glowOld = glowNew;
             glowNew = colors;
             glowSince = SystemClock.uptimeMillis();
-            invalidateSelf();
+            wake();
         }
 
         void clear() {
@@ -2236,7 +2268,7 @@ public final class ReelsFullscreenPatch {
                 if (landed || SystemClock.uptimeMillis() >= holdUntil) holdUntil = 0;
             }
             boolean held = touched || holdUntil != 0;
-            if (held != wasHeld) invalidateSelf();
+            if (held != wasHeld) wake();
             wasHeld = held;
 
             boolean hadTarget = hasTarget;
@@ -2276,7 +2308,7 @@ public final class ReelsFullscreenPatch {
                     placed = true;
                 }
             }
-            if (changed || hadTarget != hasTarget) invalidateSelf();
+            if (changed || hadTarget != hasTarget) wake();
         }
 
         private boolean isSelected(View view, int depth) {
@@ -2362,11 +2394,6 @@ public final class ReelsFullscreenPatch {
 
         /** The well of the selected button, or the lens under a finger, or something in between. */
         private void drawHighlight(Canvas canvas, boolean blurred) {
-            long now = System.nanoTime();
-            float elapsed = lastFrame == 0 ? 1f / 120f : Math.min(0.034f, (now - lastFrame) / 1e9f);
-            lastFrame = now;
-            boolean moving = animate(elapsed, isTouched() || holdUntil != 0);
-
             // How much of a lens it looks like, and how large it is: the size may swing a little
             // past either end, like something soft.
             float shown = Math.max(0f, Math.min(1f, lift));
@@ -2414,9 +2441,6 @@ public final class ReelsFullscreenPatch {
                     canvas.drawRoundRect(lens, lensRadius, lensRadius, paint);
                 }
             }
-
-            if (moving) invalidateSelf();
-            else lastFrame = 0;
         }
 
         /**
@@ -2429,9 +2453,9 @@ public final class ReelsFullscreenPatch {
          */
         private boolean animate(float elapsed, boolean up) {
             boolean touched = isTouched();
-            float leading = touched ? 1500f : 520f;
-            float trailing = touched ? 620f : 230f;
-            float damping = touched ? 1f : 0.74f;
+            float leading = touched ? 1100f : 520f;
+            float trailing = touched ? 700f : 300f;
+            float damping = touched ? 1f : 0.78f;
             float liftGoal = up ? 1f : 0f;
             float liftDamping = up ? 0.62f : 0.9f;
 
@@ -2480,7 +2504,7 @@ public final class ReelsFullscreenPatch {
 
             // New colors fade in over the old ones.
             float fade = glowOld == null ? 1f
-                    : Math.min(1f, (SystemClock.uptimeMillis() - glowSince) / 220f);
+                    : Math.min(1f, (SystemClock.uptimeMillis() - glowSince) / (float) GLOW_FADE_MS);
             canvas.save();
             canvas.clipPath(outline);
             canvas.clipOutPath(hole);
@@ -2491,7 +2515,6 @@ public final class ReelsFullscreenPatch {
             glowPaint.setAlpha(Math.round(alpha * fade));
             canvas.drawBitmap(glowNew, null, pill, glowPaint);
             canvas.restore();
-            if (fade < 1f) invalidateSelf();
         }
 
         @Override
