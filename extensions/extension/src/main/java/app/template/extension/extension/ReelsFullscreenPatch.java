@@ -111,8 +111,8 @@ public final class ReelsFullscreenPatch {
     private static final int GLASS_BLUR_DP = 20;
     // With edges that bend the picture the glass can be clearer.
     private static final int GLASS_CLEAR_BLUR_DP = 8;
-    private static final int GLASS_EDGE_DP = 20;
-    private static final int GLASS_BEND_DP = 26;
+    private static final int GLASS_EDGE_DP = 11;
+    private static final int GLASS_BEND_DP = 14;
     private static final String MESSAGES_LINK = "instagram://direct-inbox";
     // Line Instagram draws along the top of the tab bar.
     private static final String TAB_BAR_LINE_ID = "tab_bar_shadow";
@@ -296,6 +296,8 @@ public final class ReelsFullscreenPatch {
         private boolean layoutChanged;
         private int skippedFrames;
         private boolean railShown;
+        /** Whether Instagram shows its layout for large screens, with the navigation rail. */
+        private boolean wideLayout;
         private int pass;
 
         private WeakReference<View> lastReels = new WeakReference<>(null);
@@ -390,7 +392,8 @@ public final class ReelsFullscreenPatch {
                 churn = changed ? churn + 1 : 0;
                 if (changed) layoutChanged = true;
             }
-            railShown = seamScrubber && navigationRailShown(decor);
+            wideLayout = navigationRailShown(decor);
+            railShown = seamScrubber && wideLayout;
             fill(reels);
             if (seamScrubber) updateSeamBar(reels, decor, top, bottom);
             if (debug) watchPage(reels);
@@ -1028,9 +1031,18 @@ public final class ReelsFullscreenPatch {
             // Instagram keeps some spacing below the reel pages, that goes. Under a floating tab bar
             // the pages end above the bar instead: Instagram lays a page out for its own height and
             // puts the caption and buttons at its bottom, where the bar would cover them.
-            if (reels.getPaddingBottom() != floatLift) {
+            int covered = 0;
+            View tabBar = lastTabBar.get();
+            if (floatLift > 0 && tabBar != null && tabBar.isShown()) {
+                int[] location = new int[2];
+                reels.getLocationInWindow(location);
+                int reelsBottom = location[1] + reels.getHeight();
+                tabBar.getLocationInWindow(location);
+                covered = Math.max(0, reelsBottom - location[1]);
+            }
+            if (reels.getPaddingBottom() != covered) {
                 if (!originalPadding.containsKey(reels)) rememberPadding(reels, false, true);
-                reels.setPadding(reels.getPaddingLeft(), reels.getPaddingTop(), reels.getPaddingRight(), floatLift);
+                reels.setPadding(reels.getPaddingLeft(), reels.getPaddingTop(), reels.getPaddingRight(), covered);
                 changed = true;
             }
 
@@ -1345,6 +1357,16 @@ public final class ReelsFullscreenPatch {
             int width = content.getWidth();
             int height = content.getHeight();
             if (width == 0 || height == 0) return;
+            // Only the layout for large screens leaves part of a page unused. On a phone screen the
+            // page is filled already, scaling it there pushes the caption out at the bottom.
+            if (!wideLayout) {
+                if (content.getScaleY() != 1f || content.getTranslationY() != 0f) {
+                    content.setScaleX(1f);
+                    content.setScaleY(1f);
+                    content.setTranslationY(0f);
+                }
+                return;
+            }
 
             // Bounds of what the page actually shows.
             int left = Integer.MAX_VALUE;
@@ -1831,7 +1853,7 @@ public final class ReelsFullscreenPatch {
             if (changed || sheen == null) {
                 // Light falls on glass from above: bright upper edge, clear middle, faint glow below.
                 sheen = new LinearGradient(0, pill.top, 0, pill.bottom,
-                        new int[]{0x47FFFFFF, 0x0DFFFFFF, 0x00FFFFFF, 0x1AFFFFFF},
+                        new int[]{0x24FFFFFF, 0x08FFFFFF, 0x00FFFFFF, 0x0DFFFFFF},
                         new float[]{0f, 0.35f, 0.7f, 1f}, Shader.TileMode.CLAMP);
                 rim = new LinearGradient(0, pill.top, 0, pill.bottom,
                         new int[]{0xB3FFFFFF, 0x26FFFFFF, 0x66FFFFFF},
@@ -1908,7 +1930,7 @@ public final class ReelsFullscreenPatch {
                 canvas.save();
                 canvas.clipOutPath(outline);
                 shadowPaint.setColor(0x01000000);
-                shadowPaint.setShadowLayer(10 * density, 0, 3 * density, 0x59000000);
+                shadowPaint.setShadowLayer(8 * density, 0, 2 * density, 0x40000000);
                 canvas.drawRoundRect(pill, radius, radius, shadowPaint);
                 canvas.restore();
             }
@@ -1960,11 +1982,11 @@ public final class ReelsFullscreenPatch {
             paint.setColor(Color.WHITE);
             if (highlight != null) {
                 // Faint outline all around, bright where the edge faces the light.
-                paint.setStrokeWidth(density);
-                paint.setColor(0x24FFFFFF);
+                paint.setStrokeWidth(0.75f * density);
+                paint.setColor(0x1AFFFFFF);
                 canvas.drawRoundRect(pill, radius, radius, paint);
                 paint.setColor(Color.WHITE);
-                paint.setStrokeWidth(1.5f * density);
+                paint.setStrokeWidth(density);
                 paint.setShader(highlight);
             } else {
                 paint.setStrokeWidth(1.25f * density);
@@ -2323,8 +2345,8 @@ public final class ReelsFullscreenPatch {
             shader.setFloatUniform("refractionHeight", Math.max(1f, edge));
             // Negative: the rim shows what lies further in.
             shader.setFloatUniform("refractionAmount", -bend);
-            shader.setFloatUniform("depthEffect", 1f);
-            shader.setFloatUniform("chromaticAberration", 1f);
+            shader.setFloatUniform("depthEffect", 0.5f);
+            shader.setFloatUniform("chromaticAberration", 0.35f);
             return RenderEffect.createChainEffect(
                     RenderEffect.createRuntimeShaderEffect(shader, "content"), behind);
         }
@@ -2334,9 +2356,10 @@ public final class ReelsFullscreenPatch {
             RuntimeShader shader = new RuntimeShader(HIGHLIGHT);
             shader.setFloatUniform("size", pill.width(), pill.height());
             shader.setFloatUniform("cornerRadii", radius, radius, radius, radius);
-            shader.setColorUniform("color", 0xB3FFFFFF);
+            shader.setColorUniform("color", 0x66FFFFFF);
             shader.setFloatUniform("angle", (float) Math.toRadians(45));
-            shader.setFloatUniform("falloff", 1f);
+            // Only the parts that face the light squarely catch it.
+            shader.setFloatUniform("falloff", 2.5f);
             Matrix place = new Matrix();
             place.setTranslate(pill.left, pill.top);
             shader.setLocalMatrix(place);
