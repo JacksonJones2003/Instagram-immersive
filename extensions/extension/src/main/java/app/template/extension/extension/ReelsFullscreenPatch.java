@@ -20,6 +20,7 @@ import android.graphics.PixelFormat;
 import android.graphics.RecordingCanvas;
 import android.graphics.RenderEffect;
 import android.graphics.RenderNode;
+import android.graphics.RuntimeShader;
 import android.graphics.Shader;
 import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
@@ -107,6 +108,10 @@ public final class ReelsFullscreenPatch {
     private static final int MAX_BUTTONS_DEPTH = 4;
     private static final int MIN_BUTTONS = 3;
     private static final int GLASS_BLUR_DP = 20;
+    // With edges that bend the picture the glass can be clearer.
+    private static final int GLASS_CLEAR_BLUR_DP = 9;
+    private static final int GLASS_EDGE_DP = 16;
+    private static final int GLASS_BEND_DP = 14;
     private static final String MESSAGES_LINK = "instagram://direct-inbox";
     // Line Instagram draws along the top of the tab bar.
     private static final String TAB_BAR_LINE_ID = "tab_bar_shadow";
@@ -758,7 +763,7 @@ public final class ReelsFullscreenPatch {
             }
             try {
                 if (glass.blur == null) {
-                    glass.blur = new GlassBlur(GLASS_BLUR_DP * activity.getResources().getDisplayMetrics().density);
+                    glass.blur = new GlassBlur(activity.getResources().getDisplayMetrics().density);
                 }
                 int[] barLocation = new int[2];
                 int[] behindLocation = new int[2];
@@ -1915,18 +1920,48 @@ public final class ReelsFullscreenPatch {
     private static final class GlassBlur {
         private final RenderNode node = new RenderNode("piko-glass");
         private final Path path = new Path();
+        private final float density;
         private boolean recorded;
+        private boolean bendFailed;
+        private int effectWidth;
+        private int effectHeight;
 
-        GlassBlur(float radius) {
+        GlassBlur(float density) {
+            this.density = density;
+        }
+
+        private RenderEffect frosted(float radius) {
             ColorMatrix colors = new ColorMatrix();
             colors.setSaturation(1.8f);
-            node.setRenderEffect(RenderEffect.createChainEffect(
+            return RenderEffect.createChainEffect(
                     RenderEffect.createColorFilterEffect(new ColorMatrixColorFilter(colors)),
-                    RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)));
+                    RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP));
+        }
+
+        /** The effect depends on the size of the pill, it is made again when that changes. */
+        private void prepare(int width, int height) {
+            if (width == effectWidth && height == effectHeight) return;
+            effectWidth = width;
+            effectHeight = height;
+
+            // Android 13 can bend the picture along the edges like a real lens.
+            if (Build.VERSION.SDK_INT >= 33 && !bendFailed) {
+                try {
+                    float radius = Math.min(width, height) / 2f;
+                    node.setRenderEffect(GlassBend.create(frosted(GLASS_CLEAR_BLUR_DP * density), width, height,
+                            radius, Math.min(radius, GLASS_EDGE_DP * density), GLASS_BEND_DP * density));
+                    return;
+                } catch (Throwable e) {
+                    Log.e(TAG, "glass bend failure", e);
+                    bendFailed = true;
+                }
+            }
+            node.setRenderEffect(frosted(GLASS_BLUR_DP * density));
         }
 
         void capture(View behind, float moveX, float moveY, int width, int height, float squeeze) {
             if (width <= 0 || height <= 0) return;
+            prepare(width, height);
             node.setPosition(0, 0, width, height);
             RecordingCanvas canvas = node.beginRecording(width, height);
             try {
@@ -2075,6 +2110,49 @@ public final class ReelsFullscreenPatch {
                 default:
                     return true;
             }
+        }
+    }
+
+    /**
+     * Bends what is seen through a pill of glass: the middle is left alone, towards the rim the
+     * picture is pulled outwards more and more and catches light. Needs Android 13.
+     */
+    private static final class GlassBend {
+        private static final String SHADER =
+                "uniform shader content;\n"
+                + "uniform float2 size;\n"
+                + "uniform float radius;\n"
+                + "uniform float edge;\n"
+                + "uniform float bend;\n"
+                // Distance to the outline of the pill, negative inside.
+                + "float outline(float2 p, float2 halfSize, float r) {\n"
+                + "    float2 q = abs(p) - halfSize + float2(r);\n"
+                + "    return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - r;\n"
+                + "}\n"
+                + "half4 main(float2 coord) {\n"
+                + "    float2 halfSize = size * 0.5;\n"
+                + "    float2 p = coord - halfSize;\n"
+                + "    float d = outline(p, halfSize, radius);\n"
+                + "    float rim = clamp(1.0 + d / edge, 0.0, 1.0);\n"
+                + "    float amount = rim * rim * rim;\n"
+                + "    float2 slope = float2(\n"
+                + "        outline(p + float2(1.0, 0.0), halfSize, radius) - outline(p - float2(1.0, 0.0), halfSize, radius),\n"
+                + "        outline(p + float2(0.0, 1.0), halfSize, radius) - outline(p - float2(0.0, 1.0), halfSize, radius));\n"
+                + "    float steep = length(slope);\n"
+                + "    float2 outward = steep > 0.0001 ? slope / steep : float2(0.0);\n"
+                + "    half4 color = content.eval(coord - outward * amount * bend);\n"
+                + "    color.rgb += half3(0.16 * amount);\n"
+                + "    return color;\n"
+                + "}\n";
+
+        static RenderEffect create(RenderEffect behind, int width, int height, float radius, float edge, float bend) {
+            RuntimeShader shader = new RuntimeShader(SHADER);
+            shader.setFloatUniform("size", width, height);
+            shader.setFloatUniform("radius", radius);
+            shader.setFloatUniform("edge", Math.max(1f, edge));
+            shader.setFloatUniform("bend", bend);
+            return RenderEffect.createChainEffect(
+                    RenderEffect.createRuntimeShaderEffect(shader, "content"), behind);
         }
     }
 }
