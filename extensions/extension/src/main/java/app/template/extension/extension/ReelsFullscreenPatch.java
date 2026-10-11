@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
@@ -19,6 +20,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.RecordingCanvas;
+import android.graphics.Rect;
 import android.graphics.RenderEffect;
 import android.graphics.RenderNode;
 import android.graphics.RuntimeShader;
@@ -29,10 +31,13 @@ import android.net.Uri;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.MotionEvent;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
@@ -45,7 +50,10 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import java.lang.ref.WeakReference;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -120,8 +128,10 @@ public final class ReelsFullscreenPatch {
     private static final String TAB_BAR_LINE_ID = "tab_bar_shadow";
     // How much the button under the finger grows while sliding over the tab bar.
     private static final float HOVER_SCALE = 1.18f;
-    // The tab bar also takes touches this far above itself.
-    private static final int BAR_TOUCH_EXTRA_DP = 16;
+    // The rim of the navigation rail takes its colors from the screen this often, in small samples.
+    private static final long AMBIENT_INTERVAL_MS = 140;
+    private static final int AMBIENT_COLUMNS = 8;
+    private static final int AMBIENT_ROWS = 40;
     // How far the floating tab bar sits above the bottom of the screen.
     private static final int BAR_RAISE_DP = 14;
     private static final int MAX_LIST_DEPTH = 12;
@@ -238,6 +248,7 @@ public final class ReelsFullscreenPatch {
             ViewTreeObserver observer = window.getDecorView().getViewTreeObserver();
             observer.addOnGlobalLayoutListener(state);
             observer.addOnPreDrawListener(state);
+            state.watchTouches();
         } catch (Exception e) {
             Log.e(TAG, "attach failure", e);
         }
@@ -275,15 +286,30 @@ public final class ReelsFullscreenPatch {
         private RestartButton restartView;
         private GlassBar tabGlass;
         private MessagesButton messagesView;
-        private BarTouch barTouch;
-        private BarTouch railTouch;
+        /** Where the touches of the window went before they were watched. */
+        private Window.Callback touchCallback;
+        private int touchSlop;
+        private boolean gesture;
+        private boolean gestureRail;
+        private boolean gestureDragging;
+        private float gestureDown;
+        private final int[] hitLocation = new int[2];
+        /** View that holds the buttons of the tab bar. */
+        private WeakReference<View> lastTabHost = new WeakReference<>(null);
+        private final Handler mainHandler = new Handler(Looper.getMainLooper());
+        private Bitmap ambientShot;
+        private int[] ambientRows;
+        private boolean ambientPending;
+        private long ambientTime;
+        /** Padding of the navigation rail before it was kept in place under an expanded reel. */
+        private int[] railPadding;
+        private WeakReference<View> paddedRail = new WeakReference<>(null);
         /** View that holds the buttons of the navigation rail. */
         private WeakReference<View> lastRailHost = new WeakReference<>(null);
         private ViewGroup styledHost;
         private boolean railHovering;
         private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
         private boolean hovering;
-        private int barTouchExtra;
         private boolean barRaised;
         /** Button of the tab bar that the messages button stands in for. */
         private WeakReference<View> createSlot = new WeakReference<>(null);
@@ -459,6 +485,8 @@ public final class ReelsFullscreenPatch {
                     if (tabGlass == null) tabGlass = new GlassBar(activity);
                     floatContent(content, tabBar, decor);
                     styleBar(tabGlass, tabBar, tabGlass.floating ? content : null, false);
+                    View tabHost = styledHost != null ? styledHost : tabBar;
+                    if (tabHost != lastTabHost.get()) lastTabHost = new WeakReference<>(tabHost);
                     if (tabGlass.floating) {
                         int raise = Math.round(BAR_RAISE_DP * activity.getResources().getDisplayMetrics().density);
                         tabBar.setTranslationY(-raise);
@@ -476,11 +504,9 @@ public final class ReelsFullscreenPatch {
                         if (line != lastTabBarLine.get()) lastTabBarLine = new WeakReference<>(line);
                         line.setAlpha(0f);
                     }
-                    placeBarTouch(tabBar);
-                    hover(tabGlass, tabBar, false);
+                    hover(tabGlass, tabHost, false);
                 } else {
                     restoreLists();
-                    if (barTouch != null) barTouch.setVisibility(View.GONE);
                 }
 
                 // Nothing runs underneath the rail, its glass shows the colors of the screen next to it.
@@ -492,11 +518,9 @@ public final class ReelsFullscreenPatch {
                     styleBar(railGlass, rail, content, true);
                     if (styledHost != null) {
                         if (styledHost != lastRailHost.get()) lastRailHost = new WeakReference<>(styledHost);
-                        placeRailTouch(styledHost, decor);
+                        captureAmbient(railGlass, styledHost, rail, decor);
                         hover(railGlass, styledHost, true);
                     }
-                } else if (railTouch != null) {
-                    railTouch.setVisibility(View.GONE);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "glass failure", e);
@@ -522,59 +546,9 @@ public final class ReelsFullscreenPatch {
             tabGlass.floating = floated.get() == content && params.bottomMargin == 0;
         }
 
-        /** Puts the view that takes the touches of the tab bar on top of it. */
-        private void placeBarTouch(View tabBar) {
-            if (!(tabBar.getParent() instanceof ViewGroup)) return;
-            ViewGroup parent = (ViewGroup) tabBar.getParent();
-            if (barTouch == null) barTouch = new BarTouch(activity, this, false);
-            if (barTouch.getParent() != parent) {
-                if (barTouch.getParent() instanceof ViewGroup) ((ViewGroup) barTouch.getParent()).removeView(barTouch);
-                parent.addView(barTouch, new ViewGroup.LayoutParams(tabBar.getWidth(), tabBar.getHeight()));
-            } else if (parent.getChildAt(parent.getChildCount() - 1) != barTouch) {
-                barTouch.bringToFront();
-            }
-            barTouchExtra = Math.round(BAR_TOUCH_EXTRA_DP * activity.getResources().getDisplayMetrics().density);
-            ViewGroup.LayoutParams params = barTouch.getLayoutParams();
-            if (params.width != tabBar.getWidth() || params.height != tabBar.getHeight() + barTouchExtra) {
-                params.width = tabBar.getWidth();
-                params.height = tabBar.getHeight() + barTouchExtra;
-                barTouch.setLayoutParams(params);
-            }
-            barTouch.setTranslationX(tabBar.getLeft() + tabBar.getTranslationX());
-            barTouch.setTranslationY(tabBar.getTop() + tabBar.getTranslationY() - barTouchExtra);
-            barTouch.setVisibility(View.VISIBLE);
-        }
-
-        /**
-         * Same for the buttons of the navigation rail. That view goes on top of the whole window,
-         * the rail lays its own views out in ways an extra view could disturb.
-         */
-        private void placeRailTouch(View host, View decor) {
-            View root = decor.findViewById(android.R.id.content);
-            if (!(root instanceof ViewGroup) || host.getWidth() == 0 || host.getHeight() == 0) return;
-            if (railTouch == null) railTouch = new BarTouch(activity, this, true);
-            if (railTouch.getParent() != root) {
-                if (railTouch.getParent() instanceof ViewGroup) ((ViewGroup) railTouch.getParent()).removeView(railTouch);
-                ((ViewGroup) root).addView(railTouch, new ViewGroup.LayoutParams(host.getWidth(), host.getHeight()));
-            }
-            ViewGroup.LayoutParams params = railTouch.getLayoutParams();
-            if (params.width != host.getWidth() || params.height != host.getHeight()) {
-                params.width = host.getWidth();
-                params.height = host.getHeight();
-                railTouch.setLayoutParams(params);
-            }
-            int[] hostLocation = new int[2];
-            int[] rootLocation = new int[2];
-            host.getLocationInWindow(hostLocation);
-            root.getLocationInWindow(rootLocation);
-            railTouch.setTranslationX(hostLocation[0] - rootLocation[0]);
-            railTouch.setTranslationY(hostLocation[1] - rootLocation[1]);
-            railTouch.setVisibility(View.VISIBLE);
-        }
-
-        /** View that the touches of a bar are measured in and handed on to. */
+        /** View that the glass of a bar is drawn on and its touches are measured in. */
         private View barHost(boolean rail) {
-            return rail ? lastRailHost.get() : lastTabBar.get();
+            return rail ? lastRailHost.get() : lastTabHost.get();
         }
 
         private GlassBar barGlass(boolean rail) {
@@ -603,28 +577,40 @@ public final class ReelsFullscreenPatch {
             return messagesTab && button != null && createSlot.get() == button;
         }
 
-        /** The button under the lens grows, as seen through it. */
+        /** The button under the lens grows, as seen through it, and eases back when the lens leaves. */
         private void hover(GlassBar glass, View host, boolean rail) {
             boolean active = glass != null && glass.isTouched();
             boolean was = rail ? railHovering : hovering;
             if (!active && !was) return;
-            if (rail) railHovering = active;
-            else hovering = active;
 
             ViewGroup buttons = findButtons(host);
             if (buttons == null) return;
             View under = active ? buttonAt(host, glass.position(), rail) : null;
+            boolean settled = true;
             for (int i = 0; i < buttons.getChildCount(); i++) {
                 View child = buttons.getChildAt(i);
-                float scale = child == under ? HOVER_SCALE : 1f;
-                child.setScaleX(scale);
-                child.setScaleY(scale);
+                settled &= easeScale(child, child == under ? HOVER_SCALE : 1f);
             }
             if (!rail && messagesView != null) {
-                float scale = isCreateButton(under) ? HOVER_SCALE : 1f;
-                messagesView.setScaleX(scale);
-                messagesView.setScaleY(scale);
+                settled &= easeScale(messagesView, isCreateButton(under) ? HOVER_SCALE : 1f);
             }
+            boolean busy = active || !settled;
+            if (rail) railHovering = busy;
+            else hovering = busy;
+            // Keep the frames coming until every button is back to its size.
+            if (!settled) host.invalidate();
+        }
+
+        private boolean easeScale(View view, float goal) {
+            float scale = view.getScaleX();
+            float next = scale + (goal - scale) * 0.24f;
+            boolean settled = Math.abs(goal - next) < 0.004f;
+            if (settled) next = goal;
+            if (next != scale) {
+                view.setScaleX(next);
+                view.setScaleY(next);
+            }
+            return settled;
         }
 
         /** Middle of a button along its bar, in the coordinates of the bar. */
@@ -637,32 +623,33 @@ public final class ReelsFullscreenPatch {
         }
 
         private void settleLater(boolean rail) {
-            // The lens waits a moment for Instagram to switch tabs, then needs one more frame to settle.
+            // The lens waits for Instagram to switch tabs. Should that not happen, it needs one
+            // more frame to go back.
             final View host = barHost(rail);
             if (host != null) host.postDelayed(host::invalidate, GlassBar.HOLD_MS + 20);
         }
 
         /** A finger went down on a bar: the lens rises and goes to the button under it. */
-        void barPress(boolean rail, float position) {
+        private void barPress(boolean rail, float position) {
             View host = barHost(rail);
             GlassBar glass = barGlass(rail);
             View button = host == null || glass == null ? null : buttonAt(host, position, rail);
             if (button != null) glass.press(buttonCenter(host, button, rail));
         }
 
-        void barUnpress(boolean rail) {
+        private void barUnpress(boolean rail) {
             GlassBar glass = barGlass(rail);
             if (glass == null) return;
             glass.unpress();
             settleLater(rail);
         }
 
-        void barDrag(boolean rail, float position) {
+        private void barDrag(boolean rail, float position) {
             GlassBar glass = barGlass(rail);
             if (glass != null) glass.drag(position);
         }
 
-        void barRelease(boolean rail, float position, boolean select) {
+        private void barRelease(boolean rail, float position, boolean select) {
             GlassBar glass = barGlass(rail);
             View host = barHost(rail);
             if (glass != null) {
@@ -674,76 +661,243 @@ public final class ReelsFullscreenPatch {
             settleLater(rail);
         }
 
-        /** Whether a position on a bar is over the messages button. */
-        boolean barIsMessages(boolean rail, float position) {
-            View host = barHost(rail);
-            return !rail && host != null && messagesView != null && messagesView.getVisibility() == View.VISIBLE
-                    && isCreateButton(buttonAt(host, position, false));
-        }
-
-        void barOpenMessages() {
-            openMessages();
-        }
-
-        /** Presses the button a slide ended on, with a short touch in its middle. */
-        void barTap(boolean rail, float position) {
-            try {
-                final View host = barHost(rail);
-                View button = host == null ? null : buttonAt(host, position, rail);
-                if (button == null) return;
-                if (barIsMessages(rail, position)) {
-                    openMessages();
-                    return;
-                }
-
-                float centerX = button.getWidth() / 2f;
-                float centerY = button.getHeight() / 2f;
-                for (View view = button; view != host; view = (View) view.getParent()) {
-                    centerX += view.getLeft();
-                    centerY += view.getTop();
-                }
-                final float x0 = centerX;
-                final float y0 = centerY;
-                final long downTime = SystemClock.uptimeMillis();
-                barSend(host, downTime, MotionEvent.ACTION_DOWN, x0, y0);
-                // A finger stays down for a moment, some buttons ignore anything shorter.
-                host.postDelayed(() -> barSend(host, downTime, MotionEvent.ACTION_UP, x0, y0), 60);
-            } catch (Exception e) {
-                Log.e(TAG, "bar press failure", e);
+        /** Presses the button a slide ended on the way a finger would: with a touch on the window. */
+        private void barTap(boolean rail, float position) {
+            final View host = barHost(rail);
+            View button = host == null ? null : buttonAt(host, position, rail);
+            if (button == null || touchCallback == null) return;
+            if (isCreateButton(button)) {
+                openMessages();
+                return;
             }
+            int[] location = new int[2];
+            button.getLocationInWindow(location);
+            final float x = location[0] + button.getWidth() / 2f;
+            final float y = location[1] + button.getHeight() / 2f;
+            // Once the touch that is being handled right now is over.
+            host.post(() -> {
+                long time = SystemClock.uptimeMillis();
+                windowTouch(time, time, MotionEvent.ACTION_DOWN, x, y);
+                windowTouch(time, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y);
+            });
         }
 
-        private void barSend(View host, long downTime, int action, float x, float y) {
-            MotionEvent event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, x, y, 0);
+        private void windowTouch(long downTime, long time, int action, float x, float y) {
+            MotionEvent event = MotionEvent.obtain(downTime, time, action, x, y, 0);
             event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
             try {
-                host.dispatchTouchEvent(event);
+                touchCallback.dispatchTouchEvent(event);
             } catch (Exception e) {
-                Log.e(TAG, "bar touch failure", e);
+                Log.e(TAG, "bar press failure", e);
             } finally {
                 event.recycle();
             }
         }
 
         /**
-         * Hands a touch on to Instagram's bar as it happens, so taps and long presses are
-         * handled by Instagram itself. The action can be replaced to call a touch off.
+         * Watches the touches of the window. Instagram keeps getting every one of them as before,
+         * taps and long presses on the bars are its own. Only a slide along a bar is taken over.
          */
-        void barForward(boolean rail, MotionEvent event, int action) {
-            View host = barHost(rail);
-            if (host == null) return;
-            // The touch area of the tab bar starts above it, a touch up there counts as on its top edge.
-            float y = rail ? event.getY() : Math.max(2f, event.getY() - barTouchExtra);
-            MotionEvent copy = MotionEvent.obtain(event.getDownTime(), event.getEventTime(), action,
-                    event.getX(), y, event.getMetaState());
-            copy.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        void watchTouches() {
             try {
-                host.dispatchTouchEvent(copy);
-            } catch (Exception e) {
-                Log.e(TAG, "bar touch failure", e);
-            } finally {
-                copy.recycle();
+                Window window = activity.getWindow();
+                final Window.Callback original = window.getCallback();
+                if (original == null || touchCallback != null) return;
+                touchCallback = original;
+                // Fingers wobble during a tap, only a clear slide counts as one.
+                touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop() * 2;
+                window.setCallback((Window.Callback) Proxy.newProxyInstance(activity.getClassLoader(),
+                        new Class<?>[]{Window.Callback.class}, (proxy, method, arguments) -> {
+                            if (arguments != null && arguments.length == 1 && arguments[0] instanceof MotionEvent
+                                    && "dispatchTouchEvent".equals(method.getName())) {
+                                boolean taken = false;
+                                try {
+                                    taken = onWindowTouch((MotionEvent) arguments[0]);
+                                } catch (Throwable e) {
+                                    Log.e(TAG, "touch failure", e);
+                                }
+                                if (taken) return Boolean.TRUE;
+                            }
+                            try {
+                                return method.invoke(original, arguments);
+                            } catch (InvocationTargetException e) {
+                                throw e.getCause() != null ? e.getCause() : e;
+                            }
+                        }));
+            } catch (Throwable e) {
+                Log.e(TAG, "touch watch failure", e);
             }
+        }
+
+        /** Position of a touch along a bar, in the coordinates of the bar. */
+        private float along(boolean rail, MotionEvent event) {
+            View host = barHost(rail);
+            if (host == null) return 0;
+            host.getLocationInWindow(hitLocation);
+            return rail ? event.getY() - hitLocation[1] : event.getX() - hitLocation[0];
+        }
+
+        /** Whether the touch of the window is taken away from Instagram. */
+        private boolean onWindowTouch(MotionEvent event) {
+            if (!glassBar) return false;
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                gesture = false;
+                gestureDragging = false;
+                Boolean rail = barUnder(event.getX(), event.getY());
+                if (rail == null) return false;
+                gesture = true;
+                gestureRail = rail;
+                gestureDown = rail ? event.getY() : event.getX();
+                barPress(rail, along(rail, event));
+                return false;
+            }
+            if (!gesture) return false;
+
+            boolean rail = gestureRail;
+            switch (action) {
+                case MotionEvent.ACTION_MOVE:
+                    float moved = (rail ? event.getY() : event.getX()) - gestureDown;
+                    if (!gestureDragging && Math.abs(moved) > touchSlop) {
+                        gestureDragging = true;
+                        // From here on the finger moves the lens. Instagram lets go of the button
+                        // it had pressed.
+                        MotionEvent cancel = MotionEvent.obtain(event);
+                        cancel.setAction(MotionEvent.ACTION_CANCEL);
+                        try {
+                            touchCallback.dispatchTouchEvent(cancel);
+                        } finally {
+                            cancel.recycle();
+                        }
+                    }
+                    if (!gestureDragging) return false;
+                    barDrag(rail, along(rail, event));
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    gesture = false;
+                    if (!gestureDragging) {
+                        barUnpress(rail);
+                        return false;
+                    }
+                    gestureDragging = false;
+                    barRelease(rail, along(rail, event), action == MotionEvent.ACTION_UP);
+                    return true;
+                default:
+                    return gestureDragging;
+            }
+        }
+
+        /** The bar a touch lands on: true for the navigation rail, false for the tab bar, or null. */
+        private Boolean barUnder(float x, float y) {
+            View railHost = lastRailHost.get();
+            View tabHost = lastTabHost.get();
+            boolean onRail = railHost != null && railHost.isShown() && contains(railHost, x, y);
+            boolean onTab = !onRail && tabHost != null && tabHost.isShown() && contains(tabHost, x, y);
+            if (!onRail && !onTab) return null;
+
+            // Something else can be on top of a bar, a sheet or a viewer for example.
+            View hit = topClickableAt(activity.getWindow().getDecorView(), x, y, 0);
+            if (hit == null) return onRail;
+            if (onRail) return isInside(hit, railHost) ? Boolean.TRUE : null;
+            return isInside(hit, tabHost) || hit == messagesView ? Boolean.FALSE : null;
+        }
+
+        private boolean contains(View view, float x, float y) {
+            view.getLocationInWindow(hitLocation);
+            return x >= hitLocation[0] && x < hitLocation[0] + view.getWidth()
+                    && y >= hitLocation[1] && y < hitLocation[1] + view.getHeight();
+        }
+
+        /** The view a touch at this place goes to first: the topmost one that reacts to a tap. */
+        private View topClickableAt(View view, float x, float y, int depth) {
+            if (view.getVisibility() != View.VISIBLE || !contains(view, x, y)) return null;
+            if (view instanceof ViewGroup && depth < 48) {
+                ViewGroup group = (ViewGroup) view;
+                for (int i = group.getChildCount() - 1; i >= 0; i--) {
+                    View hit = topClickableAt(group.getChildAt(i), x, y, depth + 1);
+                    if (hit != null) return hit;
+                }
+            }
+            return view.isClickable() || view.isLongClickable() ? view : null;
+        }
+
+        /**
+         * Samples the screen next to the navigation rail into one color for every stretch of its
+         * height, for the rim of its glass. Cheap and only now and then, the screen is not drawn twice.
+         */
+        private void captureAmbient(final GlassBar glass, final View host, View rail, View decor) {
+            if (Build.VERSION.SDK_INT < 26 || ambientPending || glass.pill.isEmpty()) return;
+            long now = SystemClock.uptimeMillis();
+            if (now - ambientTime < AMBIENT_INTERVAL_MS) return;
+
+            int[] location = new int[2];
+            rail.getLocationInWindow(location);
+            int left = location[0] + rail.getWidth();
+            host.getLocationInWindow(location);
+            Rect source = new Rect(left, Math.round(location[1] + glass.pill.top),
+                    decor.getWidth(), Math.round(location[1] + glass.pill.bottom));
+            if (source.width() <= 0 || source.height() <= 0) return;
+
+            if (ambientShot == null) {
+                ambientShot = Bitmap.createBitmap(AMBIENT_COLUMNS, AMBIENT_ROWS, Bitmap.Config.ARGB_8888);
+            }
+            ambientPending = true;
+            ambientTime = now;
+            try {
+                PixelCopy.request(activity.getWindow(), source, ambientShot, result -> {
+                    ambientPending = false;
+                    if (result != PixelCopy.SUCCESS) return;
+                    try {
+                        int[] rows = ambientColors(ambientShot);
+                        // A still screen must not keep the rail redrawing.
+                        if (!differs(rows, ambientRows)) return;
+                        ambientRows = rows;
+                        glass.setGlow(Bitmap.createBitmap(rows, 1, rows.length, Bitmap.Config.ARGB_8888));
+                        host.invalidate();
+                    } catch (Throwable e) {
+                        Log.e(TAG, "ambient failure", e);
+                    }
+                }, mainHandler);
+            } catch (Throwable e) {
+                ambientPending = false;
+                Log.e(TAG, "ambient failure", e);
+            }
+        }
+
+        /** One richer version of the average color of every row of a sample. */
+        private int[] ambientColors(Bitmap shot) {
+            int width = shot.getWidth();
+            int height = shot.getHeight();
+            int[] pixels = new int[width * height];
+            shot.getPixels(pixels, 0, width, 0, 0, width, height);
+            int[] rows = new int[height];
+            float[] hsv = new float[3];
+            for (int y = 0; y < height; y++) {
+                int red = 0;
+                int green = 0;
+                int blue = 0;
+                for (int x = 0; x < width; x++) {
+                    int pixel = pixels[y * width + x];
+                    red += Color.red(pixel);
+                    green += Color.green(pixel);
+                    blue += Color.blue(pixel);
+                }
+                Color.RGBToHSV(red / width, green / width, blue / width, hsv);
+                hsv[1] = Math.min(1f, hsv[1] * 1.5f);
+                rows[y] = Color.HSVToColor(hsv);
+            }
+            return rows;
+        }
+
+        private boolean differs(int[] rows, int[] other) {
+            if (other == null || other.length != rows.length) return true;
+            for (int i = 0; i < rows.length; i++) {
+                if (Math.abs(Color.red(rows[i]) - Color.red(other[i])) > 5
+                        || Math.abs(Color.green(rows[i]) - Color.green(other[i])) > 5
+                        || Math.abs(Color.blue(rows[i]) - Color.blue(other[i])) > 5) return true;
+            }
+            return false;
         }
 
         private View findTabBar(View decor) {
@@ -913,7 +1067,8 @@ public final class ReelsFullscreenPatch {
             }
             glass.layout(bar, buttons, 0, 0);
 
-            if (behind == null || blurFailed || Build.VERSION.SDK_INT < 31 || glass.pill.isEmpty()) {
+            // Only a bar that floats over the screen shows it through itself.
+            if (ambient || behind == null || blurFailed || Build.VERSION.SDK_INT < 31 || glass.pill.isEmpty()) {
                 glass.blur = null;
                 return;
             }
@@ -925,13 +1080,10 @@ public final class ReelsFullscreenPatch {
                 int[] behindLocation = new int[2];
                 bar.getLocationInWindow(barLocation);
                 behind.getLocationInWindow(behindLocation);
-                // Next to the screen instead of over it: its whole width is squeezed into the pill,
-                // every row of the pill takes its colors from the row of the screen beside it.
-                float squeeze = ambient && behind.getWidth() > 0 ? glass.pill.width() / behind.getWidth() : 1f;
                 ((GlassBlur) glass.blur).capture(behind,
-                        ambient ? 0 : behindLocation[0] - barLocation[0] - glass.pill.left,
+                        behindLocation[0] - barLocation[0] - glass.pill.left,
                         behindLocation[1] - barLocation[1] - glass.pill.top,
-                        Math.round(glass.pill.width()), Math.round(glass.pill.height()), squeeze);
+                        Math.round(glass.pill.width()), Math.round(glass.pill.height()), 1f);
             } catch (Throwable e) {
                 // Not every device or view can be recorded like this, go without blur then.
                 Log.e(TAG, "blur failure", e);
@@ -1143,6 +1295,59 @@ public final class ReelsFullscreenPatch {
                 removeMargins(child, top, bottom);
                 removePadding(parent, child, top, bottom);
                 child = parent;
+            }
+            holdRail(reels, decor);
+        }
+
+        private boolean isInside(View view, View ancestor) {
+            for (View current = view; current != null; ) {
+                if (current == ancestor) return true;
+                current = current.getParent() instanceof View ? (View) current.getParent() : null;
+            }
+            return false;
+        }
+
+        /**
+         * The navigation rail sits inside one of the views that grow when a reel is expanded, and
+         * would grow and move its buttons along. It is padded by what was taken away around it,
+         * so it looks the same in Reels as everywhere else.
+         */
+        private void holdRail(View reels, View decor) {
+            View rail = lastRail.get();
+            if (rail == null || !rail.isShown()) return;
+
+            int top = 0;
+            int bottom = 0;
+            View child = reels;
+            while (child != decor && child.getParent() instanceof ViewGroup) {
+                ViewGroup parent = (ViewGroup) child.getParent();
+                if (isInside(rail, child)) {
+                    int[] padding = originalPadding.get(parent);
+                    if (padding != null) {
+                        top += padding[1] - parent.getPaddingTop();
+                        bottom += padding[3] - parent.getPaddingBottom();
+                    }
+                    int[] margins = originalMargins.get(child);
+                    if (margins != null && child.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+                        ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) child.getLayoutParams();
+                        top += margins[0] - params.topMargin;
+                        bottom += margins[1] - params.bottomMargin;
+                    }
+                }
+                child = parent;
+            }
+            if (top <= 0 && bottom <= 0 && railPadding == null) return;
+
+            if (railPadding == null || paddedRail.get() != rail) {
+                railPadding = new int[]{rail.getPaddingLeft(), rail.getPaddingTop(),
+                        rail.getPaddingRight(), rail.getPaddingBottom()};
+                paddedRail = new WeakReference<>(rail);
+            }
+            int wantTop = railPadding[1] + Math.max(0, top);
+            int wantBottom = railPadding[3] + Math.max(0, bottom);
+            if (rail.getPaddingTop() != wantTop || rail.getPaddingBottom() != wantBottom) {
+                rail.setPadding(railPadding[0], wantTop, railPadding[2], wantBottom);
+                changed = true;
             }
         }
 
@@ -1512,6 +1717,12 @@ public final class ReelsFullscreenPatch {
         }
 
         private void restore(View decor) {
+            View rail = paddedRail.get();
+            if (railPadding != null && rail != null) {
+                rail.setPadding(railPadding[0], railPadding[1], railPadding[2], railPadding[3]);
+            }
+            railPadding = null;
+
             for (Map.Entry<View, int[]> entry : originalPadding.entrySet()) {
                 View view = entry.getKey();
                 int[] padding = entry.getValue();
@@ -1560,6 +1771,8 @@ public final class ReelsFullscreenPatch {
             active = false;
             // The remembered spacing can be from before a fold or rotation, let Instagram redo it.
             decor.requestApplyInsets();
+            // Everything goes back in one layout, the frame before it would show half of it.
+            layoutChanged = true;
         }
 
         private View currentPage(View reels) {
@@ -1846,28 +2059,36 @@ public final class ReelsFullscreenPatch {
      *
      * The selected button sits in a dark well. Under a finger the well rises into a clear lens
      * that is larger than the pill, follows the finger, stretches while it moves and sinks back
-     * into a well on the button it is let go on.
+     * into a well on the button it is let go on. Every part of that moves on springs that run on
+     * the clock, so it looks the same at any frame rate.
      */
     private static final class GlassBar extends Drawable {
-        /** How long the lens stays where a finger left it, for Instagram to switch tabs. */
+        /** How long at most the lens waits where a finger left it for Instagram to switch tabs. */
         static final long HOLD_MS = 400;
+        private static final int LEFT = 0;
+        private static final int TOP = 1;
+        private static final int RIGHT = 2;
+        private static final int BOTTOM = 3;
+        /** Springs are worked out in steps of at most this many seconds. */
+        private static final float SPRING_STEP = 0.004f;
 
         final RectF pill = new RectF();
         private final RectF target = new RectF();
-        private final RectF bubble = new RectF();
         private final RectF lens = new RectF();
         private final RectF next = new RectF();
         private final RectF inner = new RectF();
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Path outline = new Path();
+        private final Path hole = new Path();
         private final float density;
         private Shader sheen;
         private Shader rim;
         private Shader highlight;
         private boolean highlightFailed;
         private boolean hasTarget;
-        private boolean bubblePlaced;
+        private boolean placed;
         private boolean vertical;
         boolean light;
         boolean floating;
@@ -1876,13 +2097,26 @@ public final class ReelsFullscreenPatch {
         /** A GlassBlur, only on Android versions that have it. */
         Object blur;
 
+        /** Colors of the screen next to the bar from top to bottom, and the ones they replace. */
+        private Bitmap glowNew;
+        private Bitmap glowOld;
+        private long glowSince;
+
         private boolean pressed;
         private boolean dragging;
         private float position;
         private long holdUntil;
         private boolean wasHeld;
+
+        /** Edges of the highlight, where they are headed and how fast they move. */
+        private final float[] edge = new float[4];
+        private final float[] goal = new float[4];
+        private final float[] speed = new float[4];
         /** 0 while the highlight is a well, 1 while it is a lens. */
         private float lift;
+        private float liftSpeed;
+        private boolean forward = true;
+        private long lastFrame;
 
         GlassBar(Context context) {
             density = context.getResources().getDisplayMetrics().density;
@@ -1922,6 +2156,13 @@ public final class ReelsFullscreenPatch {
         /** Where along the bar the finger is. */
         float position() {
             return position;
+        }
+
+        void setGlow(Bitmap colors) {
+            glowOld = glowNew;
+            glowNew = colors;
+            glowSince = SystemClock.uptimeMillis();
+            invalidateSelf();
         }
 
         void clear() {
@@ -1982,12 +2223,22 @@ public final class ReelsFullscreenPatch {
                 }
             }
 
-            // Under a finger, and for a moment after it lifts, the highlight is where the finger was.
-            boolean held = isTouched() || SystemClock.uptimeMillis() < holdUntil;
-            if (!held) holdUntil = 0;
-            // The lens has to sink back even when it ends up on the button it started from.
+            // After a finger lifts the lens stays put until Instagram has selected the button it
+            // was over, which takes a frame or two, and sinks into the well there right away.
+            boolean touched = isTouched();
+            if (!touched && holdUntil != 0) {
+                boolean landed = false;
+                if (selected != null) {
+                    float start = vertical ? offsetY + selected.getTop() : offsetX + selected.getLeft();
+                    float end = vertical ? offsetY + selected.getBottom() : offsetX + selected.getRight();
+                    landed = position >= start && position <= end;
+                }
+                if (landed || SystemClock.uptimeMillis() >= holdUntil) holdUntil = 0;
+            }
+            boolean held = touched || holdUntil != 0;
             if (held != wasHeld) invalidateSelf();
             wasHeld = held;
+
             boolean hadTarget = hasTarget;
             hasTarget = selected != null || held;
             float inset = 4 * density;
@@ -2016,9 +2267,13 @@ public final class ReelsFullscreenPatch {
             if (hasTarget) {
                 changed |= !next.equals(target);
                 target.set(next);
-                if (!bubblePlaced) {
-                    bubble.set(target);
-                    bubblePlaced = true;
+                goal[LEFT] = target.left;
+                goal[TOP] = target.top;
+                goal[RIGHT] = target.right;
+                goal[BOTTOM] = target.bottom;
+                if (!placed) {
+                    System.arraycopy(goal, 0, edge, 0, 4);
+                    placed = true;
                 }
             }
             if (changed || hadTarget != hasTarget) invalidateSelf();
@@ -2052,8 +2307,7 @@ public final class ReelsFullscreenPatch {
             }
 
             boolean blurred = false;
-            boolean canBlur = blur != null && Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated();
-            if (canBlur && !ambient) {
+            if (!ambient && blur != null && Build.VERSION.SDK_INT >= 31 && canvas.isHardwareAccelerated()) {
                 blurred = ((GlassBlur) blur).draw(canvas, pill, radius);
             }
 
@@ -2066,7 +2320,7 @@ public final class ReelsFullscreenPatch {
                 canvas.drawRoundRect(pill, radius, radius, paint);
                 // Its rim catches a little of the colors of the screen next to it,
                 // fading out a few pixels in.
-                if (canBlur) {
+                if (glowNew != null) {
                     glow(canvas, radius, 2.5f * density, 120);
                     glow(canvas, radius, 6f * density, 55);
                 }
@@ -2108,59 +2362,109 @@ public final class ReelsFullscreenPatch {
 
         /** The well of the selected button, or the lens under a finger, or something in between. */
         private void drawHighlight(Canvas canvas, boolean blurred) {
-            boolean up = isTouched() || holdUntil != 0;
-            float moved = glide();
-            float rise = ((up ? 1f : 0f) - lift) * (up ? 0.35f : 0.25f);
-            if (Math.abs(rise) < 0.004f) {
-                lift = up ? 1f : 0f;
-                rise = 0f;
-            } else {
-                lift += rise;
-            }
+            long now = System.nanoTime();
+            float elapsed = lastFrame == 0 ? 1f / 120f : Math.min(0.034f, (now - lastFrame) / 1e9f);
+            lastFrame = now;
+            boolean moving = animate(elapsed, isTouched() || holdUntil != 0);
 
+            // How much of a lens it looks like, and how large it is: the size may swing a little
+            // past either end, like something soft.
+            float shown = Math.max(0f, Math.min(1f, lift));
+            float grown = Math.max(-0.2f, Math.min(1.25f, lift));
+            lens.set(edge[LEFT], edge[TOP], edge[RIGHT], edge[BOTTOM]);
+            lens.sort();
             // The lens is wider than a button and taller than the pill.
-            float along = (vertical ? bubble.height() : bubble.width()) * 0.16f * lift;
-            float across = (vertical ? bubble.width() : bubble.height()) * 0.14f * lift + 4 * density * lift;
-            lens.set(bubble);
+            float along = (vertical ? lens.height() : lens.width()) * 0.16f * grown;
+            float across = ((vertical ? lens.width() : lens.height()) * 0.14f + 4 * density) * grown;
             if (vertical) lens.inset(-across, -along);
             else lens.inset(-along, -across);
-            float lensRadius = Math.min(lens.width(), lens.height()) / 2f;
 
-            // What is behind the bar shows through the lens enlarged.
-            if (blurred && !ambient && lift > 0.01f) {
-                ((GlassBlur) blur).lens(canvas, pill, lens, lensRadius, 1f + 0.3f * lift);
-            }
+            if (lens.width() > 1f && lens.height() > 1f) {
+                float lensRadius = Math.min(lens.width(), lens.height()) / 2f;
 
-            paint.setShader(null);
-            paint.setStyle(Paint.Style.FILL);
-            // Well: darker than the pill. Lens: clear with a breath of light.
-            int well = Math.round((light ? 0x24 : 0x70) * (1f - lift));
-            paint.setColor(well << 24);
-            canvas.drawRoundRect(lens, lensRadius, lensRadius, paint);
-            int clear = Math.round(0x1F * lift);
-            paint.setColor((clear << 24) | 0xFFFFFF);
-            canvas.drawRoundRect(lens, lensRadius, lensRadius, paint);
+                // What is behind the bar shows through the lens enlarged.
+                if (blurred && shown > 0.01f) {
+                    ((GlassBlur) blur).lens(canvas, pill, lens, lensRadius, 1f + 0.3f * shown);
+                }
 
-            if (lift > 0.01f) {
-                paint.setStyle(Paint.Style.STROKE);
-                // Colors split along the edge of thick glass: cool on one side, warm on the other.
-                inner.set(lens);
-                inner.inset(-density, -density);
-                int fringe = Math.round(0x8C * lift);
-                paint.setShader(new LinearGradient(inner.left, inner.top, inner.right, inner.bottom,
-                        new int[]{(fringe << 24) | 0x4D8DFF, 0x004D8DFF, 0x00FF9A3D, (fringe << 24) | 0xFF9A3D},
-                        new float[]{0f, 0.35f, 0.65f, 1f}, Shader.TileMode.CLAMP));
-                paint.setColor(Color.WHITE);
-                paint.setStrokeWidth(1.5f * density);
-                canvas.drawRoundRect(inner, lensRadius + density, lensRadius + density, paint);
                 paint.setShader(null);
-
-                paint.setStrokeWidth(density);
-                paint.setColor((Math.round(0x99 * lift) << 24) | 0xFFFFFF);
+                paint.setStyle(Paint.Style.FILL);
+                // Well: darker than the pill. Lens: clear with a breath of light.
+                paint.setColor(Math.round((light ? 0x24 : 0x70) * (1f - shown)) << 24);
                 canvas.drawRoundRect(lens, lensRadius, lensRadius, paint);
+                paint.setColor((Math.round(0x1F * shown) << 24) | 0xFFFFFF);
+                canvas.drawRoundRect(lens, lensRadius, lensRadius, paint);
+
+                if (shown > 0.01f) {
+                    paint.setStyle(Paint.Style.STROKE);
+                    // Colors split along the edge of thick glass: cool on one side, warm on the other.
+                    inner.set(lens);
+                    inner.inset(-density, -density);
+                    int fringe = Math.round(0x8C * shown);
+                    paint.setShader(new LinearGradient(inner.left, inner.top, inner.right, inner.bottom,
+                            new int[]{(fringe << 24) | 0x4D8DFF, 0x004D8DFF, 0x00FF9A3D, (fringe << 24) | 0xFF9A3D},
+                            new float[]{0f, 0.35f, 0.65f, 1f}, Shader.TileMode.CLAMP));
+                    paint.setColor(Color.WHITE);
+                    paint.setStrokeWidth(1.5f * density);
+                    canvas.drawRoundRect(inner, lensRadius + density, lensRadius + density, paint);
+                    paint.setShader(null);
+
+                    paint.setStrokeWidth(density);
+                    paint.setColor((Math.round(0x99 * shown) << 24) | 0xFFFFFF);
+                    canvas.drawRoundRect(lens, lensRadius, lensRadius, paint);
+                }
             }
 
-            if (moved > 0.5f || rise != 0f) invalidateSelf();
+            if (moving) invalidateSelf();
+            else lastFrame = 0;
+        }
+
+        /**
+         * Moves the highlight on for the time that went by and says whether it is still moving.
+         *
+         * Each edge is on a spring of its own. The edge in front is on a stiffer one than the edge
+         * behind, so the highlight stretches while it travels and gathers itself when it arrives.
+         * Under a finger the springs are stiff and do not swing, on their own they are softer and
+         * swing a little past their goal.
+         */
+        private boolean animate(float elapsed, boolean up) {
+            boolean touched = isTouched();
+            float leading = touched ? 1500f : 520f;
+            float trailing = touched ? 620f : 230f;
+            float damping = touched ? 1f : 0.74f;
+            float liftGoal = up ? 1f : 0f;
+            float liftDamping = up ? 0.62f : 0.9f;
+
+            float from = vertical ? edge[TOP] + edge[BOTTOM] : edge[LEFT] + edge[RIGHT];
+            float to = vertical ? goal[TOP] + goal[BOTTOM] : goal[LEFT] + goal[RIGHT];
+            if (Math.abs(to - from) > 2f) forward = to > from;
+
+            int steps = Math.max(1, (int) Math.ceil(elapsed / SPRING_STEP));
+            float step = elapsed / steps;
+            for (int i = 0; i < steps; i++) {
+                for (int side = 0; side < 4; side++) {
+                    boolean onAxis = vertical ? side == TOP || side == BOTTOM : side == LEFT || side == RIGHT;
+                    float stiffness = !onAxis ? 600f : (side >= RIGHT) == forward ? leading : trailing;
+                    float friction = 2f * (onAxis ? damping : 0.9f) * (float) Math.sqrt(stiffness);
+                    speed[side] += (-stiffness * (edge[side] - goal[side]) - friction * speed[side]) * step;
+                    edge[side] += speed[side] * step;
+                }
+                float friction = 2f * liftDamping * (float) Math.sqrt(380f);
+                liftSpeed += (-380f * (lift - liftGoal) - friction * liftSpeed) * step;
+                lift += liftSpeed * step;
+            }
+
+            boolean moving = Math.abs(lift - liftGoal) > 0.003f || Math.abs(liftSpeed) > 0.03f;
+            for (int side = 0; side < 4; side++) {
+                moving |= Math.abs(edge[side] - goal[side]) > 0.25f || Math.abs(speed[side]) > 4f;
+            }
+            if (!moving) {
+                System.arraycopy(goal, 0, edge, 0, 4);
+                Arrays.fill(speed, 0f);
+                lift = liftGoal;
+                liftSpeed = 0f;
+            }
+            return moving;
         }
 
         /** Draws the colors of the screen in a ring of the given width along the edge of the pill. */
@@ -2170,39 +2474,24 @@ public final class ReelsFullscreenPatch {
             if (inner.isEmpty()) return;
             float innerRadius = Math.min(inner.width(), inner.height()) / 2f;
             outline.rewind();
-            outline.addRoundRect(inner, innerRadius, innerRadius, Path.Direction.CW);
-            canvas.saveLayerAlpha(pill.left, pill.top, pill.right, pill.bottom, alpha);
-            canvas.clipOutPath(outline);
-            ((GlassBlur) blur).draw(canvas, pill, radius);
-            canvas.restore();
-        }
+            outline.addRoundRect(pill, radius, radius, Path.Direction.CW);
+            hole.rewind();
+            hole.addRoundRect(inner, innerRadius, innerRadius, Path.Direction.CW);
 
-        /**
-         * Moves the highlight a part of the remaining way. The edge in front moves faster than the
-         * edge behind, so it stretches while it travels and gathers itself when it arrives.
-         */
-        private float glide() {
-            float follow = isTouched() ? 0.6f : 0.42f;
-            float trail = isTouched() ? 0.34f : 0.2f;
-            float left = target.left - bubble.left;
-            float top = target.top - bubble.top;
-            float right = target.right - bubble.right;
-            float bottom = target.bottom - bubble.bottom;
-            float moved = Math.abs(left) + Math.abs(top) + Math.abs(right) + Math.abs(bottom);
-            if (moved <= 0.5f) {
-                bubble.set(target);
-                return moved;
+            // New colors fade in over the old ones.
+            float fade = glowOld == null ? 1f
+                    : Math.min(1f, (SystemClock.uptimeMillis() - glowSince) / 220f);
+            canvas.save();
+            canvas.clipPath(outline);
+            canvas.clipOutPath(hole);
+            if (fade < 1f) {
+                glowPaint.setAlpha(Math.round(alpha * (1f - fade)));
+                canvas.drawBitmap(glowOld, null, pill, glowPaint);
             }
-            if (vertical) {
-                boolean down = top + bottom > 0;
-                bubble.set(bubble.left + left * 0.4f, bubble.top + top * (down ? trail : follow),
-                        bubble.right + right * 0.4f, bubble.bottom + bottom * (down ? follow : trail));
-            } else {
-                boolean forward = left + right > 0;
-                bubble.set(bubble.left + left * (forward ? trail : follow), bubble.top + top * 0.4f,
-                        bubble.right + right * (forward ? follow : trail), bubble.bottom + bottom * 0.4f);
-            }
-            return moved;
+            glowPaint.setAlpha(Math.round(alpha * fade));
+            canvas.drawBitmap(glowNew, null, pill, glowPaint);
+            canvas.restore();
+            if (fade < 1f) invalidateSelf();
         }
 
         @Override
@@ -2346,78 +2635,6 @@ public final class ReelsFullscreenPatch {
             paint.setStrokeWidth(2f);
             canvas.drawPath(icon, paint);
             canvas.restore();
-        }
-    }
-
-    /**
-     * Sits on top of a bar. Touches go straight on to Instagram's buttons underneath, until a
-     * finger slides along the bar: then the lens follows the finger and the button it is let go
-     * on gets pressed.
-     */
-    private static final class BarTouch extends View {
-        private final State state;
-        private final boolean rail;
-        private final int slop;
-        private float down;
-        private boolean dragging;
-        private boolean forwarding;
-        private boolean overMessages;
-
-        BarTouch(Context context, State state, boolean rail) {
-            super(context);
-            this.state = state;
-            this.rail = rail;
-            // Fingers wobble during a tap, only a clear slide counts as one.
-            slop = ViewConfiguration.get(context).getScaledTouchSlop() * 2;
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            // The rail runs from top to bottom, the tab bar from side to side.
-            float position = rail ? event.getY() : event.getX();
-            int action = event.getActionMasked();
-            switch (action) {
-                case MotionEvent.ACTION_DOWN:
-                    down = position;
-                    dragging = false;
-                    // The messages button is ours, Instagram's hidden create button sits under it.
-                    overMessages = state.barIsMessages(rail, position);
-                    forwarding = !overMessages;
-                    state.barPress(rail, position);
-                    if (forwarding) state.barForward(rail, event, action);
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    if (!dragging && Math.abs(position - down) > slop) {
-                        dragging = true;
-                        if (forwarding) state.barForward(rail, event, MotionEvent.ACTION_CANCEL);
-                        forwarding = false;
-                        if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
-                    }
-                    if (dragging) {
-                        state.barDrag(rail, position);
-                    } else if (forwarding) {
-                        state.barForward(rail, event, action);
-                    }
-                    return true;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    boolean lifted = action == MotionEvent.ACTION_UP;
-                    if (dragging) {
-                        state.barRelease(rail, position, lifted);
-                    } else {
-                        state.barUnpress(rail);
-                        if (forwarding) {
-                            state.barForward(rail, event, action);
-                        } else if (overMessages && lifted) {
-                            state.barOpenMessages();
-                        }
-                    }
-                    dragging = false;
-                    forwarding = false;
-                    return true;
-                default:
-                    return true;
-            }
         }
     }
 
