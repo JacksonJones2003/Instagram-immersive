@@ -1,3 +1,9 @@
+## [1.0.0-dev.22](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.21...v1.0.0-dev.22) (2026-10-11)
+
+### 🐛 Bug Fixes
+
+* Keep reel captions visible above the glass tab bar and make its highlight follow touches ([ecdcbeb](https://github.com/JacksonJones2003/Instagram-immersive/commit/ecdcbebbadf36a76a5d30cfd142780d4b4f78e99))
+
 ## [1.0.0-dev.21](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.20...v1.0.0-dev.21) (2026-10-11)
 
 ### ✨ New Features
