@@ -1,3 +1,9 @@
+## [1.0.0-dev.21](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.20...v1.0.0-dev.21) (2026-10-11)
+
+### ✨ New Features
+
+* Use the KMPLiquidGlass refraction and highlight shaders for the glass bars ([869fa9b](https://github.com/JacksonJones2003/Instagram-immersive/commit/869fa9be0cfa42cb3c76b38d9983765d08d4d376))
+
 ## [1.0.0-dev.20](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.19...v1.0.0-dev.20) (2026-10-11)
 
 ### 🐛 Bug Fixes

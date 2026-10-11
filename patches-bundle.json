@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-10-11T06:30:29",
-  "description": "## [1.0.0-dev.20](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.19...v1.0.0-dev.20) (2026-10-11)\n\n### 🐛 Bug Fixes\n\n* No second messages button on tab bars that have one, raise the glass tab bar ([06eebe2](https://github.com/JacksonJones2003/Instagram-immersive/commit/06eebe27385ae07a6d05a57ef34f6348fe70a670))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.20/patches-1.0.0-dev.20.mpp",
+  "created_at": "2026-10-11T06:34:04",
+  "description": "## [1.0.0-dev.21](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.20...v1.0.0-dev.21) (2026-10-11)\n\n### ✨ New Features\n\n* Use the KMPLiquidGlass refraction and highlight shaders for the glass bars ([869fa9b](https://github.com/JacksonJones2003/Instagram-immersive/commit/869fa9be0cfa42cb3c76b38d9983765d08d4d376))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.21/patches-1.0.0-dev.21.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.20"
+  "version": "1.0.0-dev.21"
 }
