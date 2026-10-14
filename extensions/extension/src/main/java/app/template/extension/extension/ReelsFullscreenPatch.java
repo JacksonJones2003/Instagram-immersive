@@ -108,8 +108,6 @@ public final class ReelsFullscreenPatch {
     private static final long DUMP_DELAY_MS = 2500;
     // Stop adjusting when Instagram keeps putting its spacing back on every layout pass.
     private static final int MAX_CHURN = 50;
-    // Windows at least this wide get Instagram's layout for large screens.
-    private static final int LARGE_SCREEN_DP = 600;
     // Frames in a row that may be skipped to keep a frame with Instagram's spacing off screen.
     private static final int MAX_SKIPPED_FRAMES = 3;
     // Passes between two searches for a navigation rail that has not been found.
@@ -311,9 +309,6 @@ public final class ReelsFullscreenPatch {
         private WeakReference<View> lastRailHost = new WeakReference<>(null);
         private ViewGroup styledHost;
         private boolean railHovering;
-        /** Width of the window when it was last seen, to notice the phone being folded or opened. */
-        private int lastWidthDp;
-        private boolean recreating;
         private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
         private boolean hovering;
         private boolean barRaised;
@@ -398,7 +393,6 @@ public final class ReelsFullscreenPatch {
 
         private void update() {
             View decor = activity.getWindow().getDecorView();
-            if (rebuildAfterFold(decor)) return;
             if (restartButton) updateRestartButton(decor);
             if (messagesTab) updateMessagesTab(decor);
             if (glassBar) updateGlass(decor);
@@ -437,31 +431,6 @@ public final class ReelsFullscreenPatch {
             fill(reels);
             if (seamScrubber) updateSeamBar(reels, decor, top, bottom);
             if (debug) watchPage(reels);
-        }
-
-        /**
-         * Instagram keeps its main screen alive when the phone is folded or opened, and keeps
-         * using what it worked out for the other screen size: comments then open as the narrow
-         * card of the large screen on the cover screen, and the other way around. The main
-         * screen is built again whenever the window crosses from one size class to the other.
-         */
-        private boolean rebuildAfterFold(View decor) {
-            if (recreating) return true;
-            int width = activity.getResources().getConfiguration().screenWidthDp;
-            int last = lastWidthDp;
-            lastWidthDp = width;
-            if (last == 0 || (last >= LARGE_SCREEN_DP) == (width >= LARGE_SCREEN_DP)) return false;
-            if (!activity.getClass().getName().endsWith("MainTabActivity")) return false;
-
-            recreating = true;
-            decor.post(() -> {
-                try {
-                    if (!activity.isFinishing()) activity.recreate();
-                } catch (Exception e) {
-                    Log.e(TAG, "rebuild failure", e);
-                }
-            });
-            return true;
         }
 
         private View findReelsView(View decor) {
@@ -1208,7 +1177,9 @@ public final class ReelsFullscreenPatch {
         /** Keeps a button that restarts Instagram at the bottom of the navigation rail. */
         private void updateRestartButton(View decor) {
             View rail = findNavigationRail(decor);
-            View root = decor.findViewById(android.R.id.content);
+            // Next to the rail rather than on top of the window, so sheets that open over the
+            // rail, like comments, cover the button as well.
+            View root = rail == null ? null : (View) rail.getParent();
             if (rail == null || !rail.isShown() || rail.getWidth() == 0 || !(root instanceof ViewGroup)) {
                 if (restartView != null && restartView.getParent() instanceof ViewGroup) {
                     ((ViewGroup) restartView.getParent()).removeView(restartView);
@@ -1564,8 +1535,14 @@ public final class ReelsFullscreenPatch {
                 return;
             }
 
-            View root = decor.findViewById(android.R.id.content);
-            if (!(root instanceof ViewGroup)) return;
+            // Next to the rail rather than on top of the window, so sheets that open over the
+            // rail, like comments, cover the bar as well.
+            View rail = findNavigationRail(decor);
+            View root = rail == null ? null : (View) rail.getParent();
+            if (!(root instanceof ViewGroup)) {
+                if (seamBar != null) seamBar.setVisibility(View.GONE);
+                return;
+            }
             if (seamBar == null) seamBar = new SeamBar(activity);
             int width = Math.round(SEAM_TOUCH_WIDTH_DP * activity.getResources().getDisplayMetrics().density);
             if (seamBar.getParent() != root) {
