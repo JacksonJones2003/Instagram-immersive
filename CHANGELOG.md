@@ -1,3 +1,9 @@
+## [1.0.0-dev.29](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.28...v1.0.0-dev.29) (2026-10-14)
+
+### 🐛 Bug Fixes
+
+* Rebuild Instagram's main screen after folding or opening the phone ([3473062](https://github.com/JacksonJones2003/Instagram-immersive/commit/3473062389024e6917fb71c62541446f7de4708e))
+
 ## [1.0.0-dev.28](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.27...v1.0.0-dev.28) (2026-10-11)
 
 ### 🐛 Bug Fixes
