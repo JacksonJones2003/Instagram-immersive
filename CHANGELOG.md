@@ -1,3 +1,9 @@
+## [1.0.0-dev.30](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.29...v1.0.0-dev.30) (2026-10-14)
+
+### 🐛 Bug Fixes
+
+* Keep the rail progress bar and restart button under sheets like comments ([b259df5](https://github.com/JacksonJones2003/Instagram-immersive/commit/b259df5d772f743d8e07ab01171d53f794fca2bc))
+
 ## [1.0.0-dev.29](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.28...v1.0.0-dev.29) (2026-10-14)
 
 ### 🐛 Bug Fixes
