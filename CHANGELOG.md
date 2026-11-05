@@ -1,3 +1,9 @@
+## [1.0.0-dev.32](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.31...v1.0.0-dev.32) (2026-11-05)
+
+### ✨ New Features
+
+* Add Navigation rail below wide reels patch and fix the buttons row for wide reels ([17f7828](https://github.com/JacksonJones2003/Instagram-immersive/commit/17f78283889728e96be31b24476084ce1eba9279))
+
 ## [1.0.0-dev.31](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.30...v1.0.0-dev.31) (2026-11-05)
 
 ### ✨ New Features
