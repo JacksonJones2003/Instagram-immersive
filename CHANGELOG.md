@@ -1,3 +1,9 @@
+## [1.0.0-dev.37](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.36...v1.0.0-dev.37) (2026-11-05)
+
+### 🐛 Bug Fixes
+
+* Keep the like, comment and share buttons in sight in half mode ([219a169](https://github.com/JacksonJones2003/Instagram-immersive/commit/219a16946464ef665bcee444d015262588bcc8a1))
+
 ## [1.0.0-dev.36](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.35...v1.0.0-dev.36) (2026-11-05)
 
 ### ✨ New Features
