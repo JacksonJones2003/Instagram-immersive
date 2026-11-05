@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-05T02:46:12",
-  "description": "## [1.0.0-dev.32](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.31...v1.0.0-dev.32) (2026-11-05)\n\n### ✨ New Features\n\n* Add Navigation rail below wide reels patch and fix the buttons row for wide reels ([17f7828](https://github.com/JacksonJones2003/Instagram-immersive/commit/17f78283889728e96be31b24476084ce1eba9279))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.32/patches-1.0.0-dev.32.mpp",
+  "created_at": "2026-11-05T04:05:17",
+  "description": "## [1.0.0-dev.33](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.32...v1.0.0-dev.33) (2026-11-05)\n\n### ✨ New Features\n\n* Add Reels follow the flat half patch ([2a91eaf](https://github.com/JacksonJones2003/Instagram-immersive/commit/2a91eaf3bd170d6872d55e94f8c8f39c01474d0d))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.33/patches-1.0.0-dev.33.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.32"
+  "version": "1.0.0-dev.33"
 }

@@ -15,9 +15,9 @@ Click here to add these patches to Morphe: https://morphe.software/add-source?gi
 ## 🩹 Patches list
 
 <!-- PATCHES_START EXPANDED -->
-> **[v1.0.0-dev.32](https://github.com/JacksonJones2003/Instagram-immersive/releases/tag/v1.0.0-dev.32)**&nbsp;&nbsp;•&nbsp;&nbsp;`dev`&nbsp;&nbsp;•&nbsp;&nbsp;11 patches total
+> **[v1.0.0-dev.33](https://github.com/JacksonJones2003/Instagram-immersive/releases/tag/v1.0.0-dev.33)**&nbsp;&nbsp;•&nbsp;&nbsp;`dev`&nbsp;&nbsp;•&nbsp;&nbsp;12 patches total
 <details open>
-<summary>📦 Instagram&nbsp;&nbsp;•&nbsp;&nbsp;11 patches</summary>
+<summary>📦 Instagram&nbsp;&nbsp;•&nbsp;&nbsp;12 patches</summary>
 <br>
 
 **🎯 Supported versions:**
@@ -33,6 +33,7 @@ Click here to add these patches to Morphe: https://morphe.software/add-source?gi
 | [Move Reels buttons to the edge](#move-reels-buttons-to-the-edge) | Moves the like, comment and share buttons in Reels to the right edge of the screen. |  |
 | [Navigation rail below wide reels](#navigation-rail-below-wide-reels) | On large screens, moves the navigation rail to the bottom of the screen when a wide reel reaches it, so the reel can use the whole width, and back to the side for narrow reels. |  |
 | [Reels buttons below wide videos](#reels-buttons-below-wide-videos) | Lines the like, comment and share buttons up in a row at the bottom when a video or photo in Reels is enlarged to the full width, and puts them back in a column for narrow reels. |  |
+| [Reels follow the flat half](#reels-follow-the-flat-half) | With the phone partly folded like a book, moves Reels to the half of the inner screen that lies flat, away from the half that is lifted. |  |
 | [Reels fullscreen](#reels-fullscreen) | Extends Reels behind the status bar and to the bottom of the screen. |  |
 | [Reels fullscreen debug](#reels-fullscreen-debug) | Copies a description of the layout of each reel to the clipboard a few seconds after it is shown. Only needed to report layout problems. |  |
 | [Reels progress bar on the navigation rail](#reels-progress-bar-on-the-navigation-rail) | Shows the progress bar of Reels as a vertical bar between the navigation rail and the reel on large screens. |  |
