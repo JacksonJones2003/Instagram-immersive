@@ -1,3 +1,9 @@
+## [1.0.0-dev.35](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.34...v1.0.0-dev.35) (2026-11-05)
+
+### 🐛 Bug Fixes
+
+* Let Reels actually move over to the flat half ([7015daf](https://github.com/JacksonJones2003/Instagram-immersive/commit/7015daf2ad2cf55205c88c2687cd8f287c38b23c))
+
 ## [1.0.0-dev.34](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.33...v1.0.0-dev.34) (2026-11-05)
 
 ### ✨ New Features
