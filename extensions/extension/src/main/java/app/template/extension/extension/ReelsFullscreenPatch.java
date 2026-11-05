@@ -1541,7 +1541,7 @@ public final class ReelsFullscreenPatch {
                 if (expandMedia) enlarge((ViewGroup) content);
                 if (shownSide != 0) tuckButtons((ViewGroup) content);
                 else if (moveButtons) moveButtons((ViewGroup) content);
-                if (buttonsRow) rowButtons((ViewGroup) content);
+                if (buttonsRow && shownSide == 0) rowButtons((ViewGroup) content);
                 if (railShown) fade((ViewGroup) content);
             }
             // Instagram reuses these views for other reels, anything not confirmed in this pass
@@ -2457,16 +2457,16 @@ public final class ReelsFullscreenPatch {
         private void tuckButtons(ViewGroup content) {
             View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
             View card = findCard(content);
-            if (buttons == null || card == null || buttons.getParent() != content || buttons.getRotation() != 0f) return;
-            float margin = 6 * activity.getResources().getDisplayMetrics().density / Math.max(0.1f, content.getScaleX());
-            float cardRight = card.getRight();
-            Integer grown = enlarged.get(card);
-            if (grown != null && grown == pass) {
-                // An enlarged card reaches past the edges of the page.
-                cardRight = Math.min(content.getWidth(), card.getLeft() + card.getWidth() / 2f
-                        + card.getWidth() * card.getScaleX() / 2f + card.getTranslationX());
+            if (buttons == null || card == null || buttons.getParent() != content) return;
+            // A row of buttons below a wide reel goes back to a column first.
+            if (buttons.getRotation() != 0f) {
+                buttons.setRotation(0f);
+                buttons.setTranslationY(0f);
             }
-            buttons.setTranslationX(cardRight - margin - buttons.getRight());
+            float margin = 6 * activity.getResources().getDisplayMetrics().density / Math.max(0.1f, content.getScaleX());
+            // The half is sized to the card as laid out, an enlarged card reaches past that.
+            // The buttons stay inside what is shown.
+            buttons.setTranslationX(card.getRight() - margin - buttons.getRight());
             enlarged.put(buttons, pass);
         }
 
