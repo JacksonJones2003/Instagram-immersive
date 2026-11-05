@@ -1,3 +1,9 @@
+## [1.0.0-dev.39](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.38...v1.0.0-dev.39) (2026-11-05)
+
+### 🐛 Bug Fixes
+
+* Draw the navigation bar over the screen next to it ([04c393e](https://github.com/JacksonJones2003/Instagram-immersive/commit/04c393e5dba031745f63d23ecc20a45fe511ba8d))
+
 ## [1.0.0-dev.38](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.37...v1.0.0-dev.38) (2026-11-05)
 
 ### ✨ New Features
