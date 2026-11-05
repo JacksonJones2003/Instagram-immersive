@@ -1,3 +1,9 @@
+## [1.0.0-dev.34](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.33...v1.0.0-dev.34) (2026-11-05)
+
+### ✨ New Features
+
+* Follow the flat half when held up too, hide the rail and use the whole half ([5dcee92](https://github.com/JacksonJones2003/Instagram-immersive/commit/5dcee92abd7155ef876582fbcbccea5ad0b6a27a))
+
 ## [1.0.0-dev.33](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.32...v1.0.0-dev.33) (2026-11-05)
 
 ### ✨ New Features
