@@ -386,6 +386,9 @@ public final class ReelsFullscreenPatch {
         /** Size and place the pager is on its way to, in half the screen. */
         private float halfScale = 1f;
         private float halfMove;
+        /** A sheet like the comments, moved into the same half as the reel. */
+        private WeakReference<View> halfSheet = new WeakReference<>(null);
+        private int sheetSearches;
         /** Side of the screen the half with the sensors is on, learned when that half is lifted. */
         private int sensorSide;
         /** Side the last fold movement chose, in the terms of the phone itself. */
@@ -2187,7 +2190,87 @@ public final class ReelsFullscreenPatch {
             if (wanted && !listening) startHalf();
             else if (!wanted && listening) stopHalf();
             if (listening) halfPager = new WeakReference<>(reels);
-            if (listening && shownSide != 0) placeHalf(reels, false);
+            if (listening && shownSide != 0) {
+                placeHalf(reels, false);
+                followSheet(reels);
+            } else {
+                resetSheet();
+            }
+        }
+
+        /**
+         * Sheets that open over Reels, like the comments, sit in the middle of the whole screen.
+         * In half mode they go to the half the reel is in, scaled down to fit it if need be.
+         */
+        private void followSheet(View reels) {
+            View decor = activity.getWindow().getDecorView();
+            View sheet = halfSheet.get();
+            if (sheet != null && (!sheet.isAttachedToWindow() || !sheet.isShown())) {
+                resetSheet();
+                sheet = null;
+            }
+            if (sheet == null) {
+                // Looking through the whole window is too much for every frame.
+                if (sheetSearches++ % 6 != 0) return;
+                sheet = findSheet(decor, reels, lastRail.get(), decor);
+                if (sheet == null) return;
+                halfSheet = new WeakReference<>(sheet);
+            }
+
+            float density = activity.getResources().getDisplayMetrics().density;
+            float gap = HALF_GAP_DP * density;
+            float hinge = decor.getWidth() / 2f;
+            float start = shownSide < 0 ? gap : hinge + gap;
+            float end = shownSide < 0 ? hinge - gap : decor.getWidth() - gap;
+
+            float left = sheet.getLeft();
+            for (View view = sheet; view.getParent() instanceof View; ) {
+                view = (View) view.getParent();
+                left += view.getLeft();
+            }
+            float scale = Math.min(1f, (end - start) / Math.max(1f, sheet.getWidth()));
+            // Scaled from the middle of its bottom edge, so it still rises from the bottom.
+            sheet.setPivotX(sheet.getWidth() / 2f);
+            sheet.setPivotY(sheet.getHeight());
+            sheet.setScaleX(scale);
+            sheet.setScaleY(scale);
+            sheet.setTranslationX((start + end) / 2f - (left + sheet.getWidth() / 2f));
+        }
+
+        private void resetSheet() {
+            View sheet = halfSheet.get();
+            if (sheet != null) {
+                sheet.setScaleX(1f);
+                sheet.setScaleY(1f);
+                sheet.setTranslationX(0f);
+            }
+            halfSheet = new WeakReference<>(null);
+        }
+
+        /**
+         * A sheet is a view on top of Reels that spans much of the width but not all of it,
+         * reaches down to the bottom of the window and starts somewhere below the top.
+         */
+        private View findSheet(View view, View reels, View rail, View decor) {
+            if (view == reels || view == rail || view.getVisibility() != View.VISIBLE) return null;
+            if (view != decor && !isInside(reels, view) && view.getWidth() > 0) {
+                view.getLocationInWindow(hitLocation);
+                float width = decor.getWidth();
+                float height = decor.getHeight();
+                boolean sheet = view.getWidth() >= 0.35f * width && view.getWidth() <= 0.95f * width
+                        && hitLocation[1] + view.getHeight() >= 0.94f * height
+                        && hitLocation[1] >= 0.1f * height && hitLocation[1] <= 0.75f * height;
+                if (sheet) return view;
+            }
+            if (view instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) view;
+                // Topmost first.
+                for (int i = group.getChildCount() - 1; i >= 0; i--) {
+                    View found = findSheet(group.getChildAt(i), reels, rail, decor);
+                    if (found != null) return found;
+                }
+            }
+            return null;
         }
 
         private void startHalf() {
@@ -2215,6 +2298,7 @@ public final class ReelsFullscreenPatch {
             listening = false;
             gravityKnown = false;
             halfSide = 0;
+            resetSheet();
             if (shownSide != 0) {
                 shownSide = 0;
                 View pager = halfPager.get();
@@ -2310,6 +2394,7 @@ public final class ReelsFullscreenPatch {
             if (halfSide == 0) {
                 if (shownSide == 0) return;
                 shownSide = 0;
+                resetSheet();
                 pager.animate().cancel();
                 pager.animate().scaleX(1f).scaleY(1f).translationX(0f)
                         .setDuration(HALF_MOVE_MS).setInterpolator(new DecelerateInterpolator()).start();
