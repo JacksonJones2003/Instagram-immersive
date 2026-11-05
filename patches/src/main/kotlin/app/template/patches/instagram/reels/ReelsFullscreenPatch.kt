@@ -208,6 +208,25 @@ val railBelowWideReelsPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val reelsFollowFlatHalfPatch = bytecodePatch(
+    name = "Reels follow the flat half",
+    description = "With the phone partly folded like a book, moves Reels to the half of the inner screen that " +
+        "lies flat, away from the half that is lifted.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableFollowFlatHalf()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +

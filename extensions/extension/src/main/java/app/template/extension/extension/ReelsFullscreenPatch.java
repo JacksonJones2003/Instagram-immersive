@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
@@ -25,6 +26,10 @@ import android.graphics.RenderEffect;
 import android.graphics.RenderNode;
 import android.graphics.RuntimeShader;
 import android.graphics.Shader;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
@@ -43,7 +48,9 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.Surface;
 import android.view.ViewTreeObserver;
+import android.view.animation.DecelerateInterpolator;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.ImageView;
@@ -112,6 +119,15 @@ public final class ReelsFullscreenPatch {
     // A reel counts as reaching the navigation rail when its picture starts this close to it.
     private static final int RAIL_REACH_PX = 16;
     private static final int RAIL_BAR_MARGIN_DP = 10;
+    // The phone counts as partly folded between these hinge angles.
+    private static final float HALF_FOLD_MIN = 25f;
+    private static final float HALF_FOLD_MAX = 155f;
+    // A half lies flat when gravity leans this little to its side, and is lifted from this much on.
+    private static final float FLAT_TILT = 3f;
+    private static final float LIFTED_TILT = 4.5f;
+    private static final int HALF_GAP_DP = 12;
+    private static final long HALF_MOVE_MS = 320;
+    private static final String HALF_PREFS = "piko_reels_half";
     private static final int MAX_DUMP_DEPTH = 18;
     private static final int MAX_DUMP_LINES = 400;
     private static final long DUMP_DELAY_MS = 2500;
@@ -156,6 +172,7 @@ public final class ReelsFullscreenPatch {
     private static boolean moveButtons;
     private static boolean buttonsRow;
     private static boolean railToBottom;
+    private static boolean followFlatHalf;
     private static boolean seamScrubber;
     private static boolean restartButton;
     private static boolean glassBar;
@@ -207,6 +224,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Navigation rail below wide reels" patch. */
     public static void enableRailToBottom() {
         railToBottom = true;
+    }
+
+    /** Injection point. Added by the "Reels follow the flat half" patch. */
+    public static void enableFollowFlatHalf() {
+        followFlatHalf = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -341,6 +363,35 @@ public final class ReelsFullscreenPatch {
         private boolean bottomTouch;
         private final Matrix bottomMatrix = new Matrix();
         private final float[] bottomPoint = new float[2];
+
+        // Which half of a partly folded phone lies flat, from the hinge and gravity sensors.
+        private SensorManager sensors;
+        private boolean listening;
+        private float hingeAngle = 180f;
+        private final float[] gravity = new float[3];
+        private boolean gravityKnown;
+        /** Side of the screen the reels are moved to: -1 left, 1 right, 0 the whole screen. */
+        private int halfSide;
+        private int shownSide;
+        /** Side of the screen the half with the sensors is on, learned when that half is lifted. */
+        private int sensorSide;
+        private WeakReference<View> halfPager = new WeakReference<>(null);
+        private final SensorEventListener foldListener = new SensorEventListener() {
+            @Override
+            public void onSensorChanged(SensorEvent event) {
+                if (event.sensor.getType() == Sensor.TYPE_HINGE_ANGLE) {
+                    hingeAngle = event.values[0];
+                } else {
+                    System.arraycopy(event.values, 0, gravity, 0, 3);
+                    gravityKnown = true;
+                }
+                decideHalf();
+            }
+
+            @Override
+            public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            }
+        };
         private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
         private boolean hovering;
         private boolean barRaised;
@@ -460,9 +511,10 @@ public final class ReelsFullscreenPatch {
                 if (changed) layoutChanged = true;
             }
             wideLayout = navigationRailShown(decor);
-            railShown = seamScrubber && wideLayout && !railBottom;
+            railShown = seamScrubber && wideLayout && !railBottom && shownSide == 0;
             fill(reels);
             if (railToBottom) updateRailBottom(reels, decor);
+            if (followFlatHalf) updateHalf(reels);
             if (seamScrubber) updateSeamBar(reels, decor, top, bottom);
             if (debug) watchPage(reels);
         }
@@ -1870,6 +1922,7 @@ public final class ReelsFullscreenPatch {
 
         private void restore(View decor) {
             leaveRailBottom();
+            stopHalf();
             View rail = paddedRail.get();
             if (railPadding != null && rail != null) {
                 rail.setPadding(railPadding[0], railPadding[1], railPadding[2], railPadding[3]);
@@ -2100,6 +2153,165 @@ public final class ReelsFullscreenPatch {
                 default:
                     return true;
             }
+        }
+
+        /**
+         * With the phone partly folded like a book, Reels move over to the half that lies flat,
+         * so the half that is lifted can be turned away. Opened flat or held up, they use the
+         * whole screen again.
+         */
+        private void updateHalf(View reels) {
+            boolean wanted = wideLayout && !railBottom;
+            if (wanted && !listening) startHalf();
+            else if (!wanted && listening) stopHalf();
+            if (listening) halfPager = new WeakReference<>(reels);
+            if (listening && shownSide != 0) placeHalf(reels, false);
+        }
+
+        private void startHalf() {
+            if (Build.VERSION.SDK_INT < 30) return;
+            if (sensors == null) sensors = (SensorManager) activity.getSystemService(Context.SENSOR_SERVICE);
+            if (sensors == null) return;
+            Sensor hinge = sensors.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE);
+            Sensor down = sensors.getDefaultSensor(Sensor.TYPE_GRAVITY);
+            if (down == null) down = sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            if (hinge == null || down == null) return;
+            SharedPreferences prefs = activity.getSharedPreferences(HALF_PREFS, Context.MODE_PRIVATE);
+            sensorSide = prefs.getInt("sensor_side", 1);
+            sensors.registerListener(foldListener, hinge, SensorManager.SENSOR_DELAY_UI);
+            sensors.registerListener(foldListener, down, SensorManager.SENSOR_DELAY_UI);
+            listening = true;
+        }
+
+        private void stopHalf() {
+            if (listening && sensors != null) sensors.unregisterListener(foldListener);
+            listening = false;
+            gravityKnown = false;
+            halfSide = 0;
+            if (shownSide != 0) {
+                shownSide = 0;
+                View pager = halfPager.get();
+                if (pager != null) {
+                    pager.animate().cancel();
+                    pager.setScaleX(1f);
+                    pager.setScaleY(1f);
+                    pager.setTranslationX(0f);
+                }
+            }
+        }
+
+        private void decideHalf() {
+            int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+            boolean upright = rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180;
+            int side = 0;
+            if (gravityKnown && upright && hingeAngle >= HALF_FOLD_MIN && hingeAngle <= HALF_FOLD_MAX) {
+                float across = rotation == Surface.ROTATION_180 ? -gravity[0] : gravity[0];
+                float face = gravity[2];
+                if (Math.abs(across) <= FLAT_TILT && face > 8f) {
+                    // The half with the sensors lies flat.
+                    side = sensorSide;
+                } else if (Math.abs(across) >= LIFTED_TILT) {
+                    // The half with the sensors is lifted: its far edge rises, which tells the side
+                    // it is on. The other half is the one that lies flat.
+                    int lifted = across > 0 ? 1 : -1;
+                    if (lifted != sensorSide) {
+                        sensorSide = lifted;
+                        activity.getSharedPreferences(HALF_PREFS, Context.MODE_PRIVATE)
+                                .edit().putInt("sensor_side", lifted).apply();
+                    }
+                    side = -lifted;
+                } else {
+                    // Held in the hands at an angle: nothing to tell, leave it as it is.
+                    side = halfSide;
+                }
+            }
+            if (side == halfSide) return;
+            halfSide = side;
+            View pager = halfPager.get();
+            if (pager != null) placeHalf(pager, true);
+        }
+
+        /** Scales Reels down to fit the chosen half of the screen and moves them over there. */
+        private void placeHalf(View pager, boolean animate) {
+            if (halfSide == 0) {
+                if (shownSide == 0) return;
+                shownSide = 0;
+                pager.animate().cancel();
+                pager.animate().scaleX(1f).scaleY(1f).translationX(0f)
+                        .setDuration(HALF_MOVE_MS).setInterpolator(new DecelerateInterpolator()).start();
+                return;
+            }
+            View decor = activity.getWindow().getDecorView();
+            if (pager.getWidth() == 0 || decor.getWidth() == 0) return;
+            float density = activity.getResources().getDisplayMetrics().density;
+            float gap = HALF_GAP_DP * density;
+
+            // The pager as laid out in the window, before it is moved.
+            float pagerX = pager.getLeft();
+            for (View view = pager; view.getParent() instanceof View; ) {
+                view = (View) view.getParent();
+                pagerX += view.getLeft();
+            }
+            View rail = findNavigationRail(decor);
+            float railRight = 0;
+            if (rail != null && rail.isShown()) {
+                rail.getLocationInWindow(hitLocation);
+                railRight = hitLocation[0] + rail.getWidth();
+            }
+            float hinge = decor.getWidth() / 2f;
+            float start = halfSide < 0 ? Math.max(railRight, pagerX) + gap : hinge + gap;
+            float end = halfSide < 0 ? hinge - gap : decor.getWidth() - gap;
+
+            // What the reel actually shows sits in the middle of the pager, its buttons included.
+            float[] extent = pageExtent(pager);
+            float scale = Math.min(1f, (end - start) / Math.max(1f, extent[1] - extent[0]));
+            float moveX = (start + end) / 2f - pagerX - (extent[0] + extent[1]) / 2f * scale;
+
+            pager.setPivotX(0f);
+            pager.setPivotY(pager.getHeight() / 2f);
+            if (animate || shownSide == 0) {
+                shownSide = halfSide;
+                pager.animate().cancel();
+                pager.animate().scaleX(scale).scaleY(scale).translationX(moveX)
+                        .setDuration(HALF_MOVE_MS).setInterpolator(new DecelerateInterpolator()).start();
+            } else if (!pager.hasTransientState() && Math.abs(pager.getScaleX() - scale) > 0.002f
+                    && pager.getAnimation() == null) {
+                // The width a reel needs changes from reel to reel.
+                pager.animate().scaleX(scale).scaleY(scale).translationX(moveX)
+                        .setDuration(HALF_MOVE_MS / 2).start();
+            }
+        }
+
+        /** Left and right edge of what the current reel shows, in the coordinates of the pager. */
+        private float[] pageExtent(View pager) {
+            float left = pager.getWidth() * 0.12f;
+            float right = pager.getWidth() * 0.96f;
+            View page = currentPage(pager);
+            View content = page == null ? null : findContent(page, 0);
+            if (content instanceof ViewGroup && content.getWidth() > 0) {
+                ViewGroup group = (ViewGroup) content;
+                float min = Float.MAX_VALUE;
+                float max = -Float.MAX_VALUE;
+                for (int i = 0; i < group.getChildCount(); i++) {
+                    View child = group.getChildAt(i);
+                    if (child.getVisibility() != View.VISIBLE || child.getWidth() == 0) continue;
+                    min = Math.min(min, child.getLeft() + child.getTranslationX());
+                    max = Math.max(max, child.getRight() + child.getTranslationX());
+                }
+                if (max > min) {
+                    // The page itself is scaled around its middle.
+                    float middle = content.getWidth() / 2f;
+                    float pageScale = content.getScaleX();
+                    float offset = 0;
+                    for (View view = content; view != pager && view.getParent() instanceof View; ) {
+                        offset += view.getLeft();
+                        view = (View) view.getParent();
+                    }
+                    left = offset + middle + (min - middle) * pageScale;
+                    right = offset + middle + (max - middle) * pageScale;
+                }
+            }
+            return new float[]{left, right};
         }
 
         private View currentPage(View reels) {
