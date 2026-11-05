@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-05T04:30:35",
-  "description": "## [1.0.0-dev.37](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.36...v1.0.0-dev.37) (2026-11-05)\n\n### 🐛 Bug Fixes\n\n* Keep the like, comment and share buttons in sight in half mode ([219a169](https://github.com/JacksonJones2003/Instagram-immersive/commit/219a16946464ef665bcee444d015262588bcc8a1))",
-  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.37/patches-1.0.0-dev.37.mpp",
+  "created_at": "2026-11-05T04:42:14",
+  "description": "## [1.0.0-dev.38](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.37...v1.0.0-dev.38) (2026-11-05)\n\n### ✨ New Features\n\n* Navigation bar below Reels in half the screen, comments open all the way there ([d69079a](https://github.com/JacksonJones2003/Instagram-immersive/commit/d69079aabd25c226d339a1614f4a2c6a264e62a4))",
+  "download_url": "https://github.com/JacksonJones2003/Instagram-immersive/releases/download/v1.0.0-dev.38/patches-1.0.0-dev.38.mpp",
   "signature_download_url": "",
-  "version": "1.0.0-dev.37"
+  "version": "1.0.0-dev.38"
 }

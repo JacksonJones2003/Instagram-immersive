@@ -1,3 +1,9 @@
+## [1.0.0-dev.38](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.37...v1.0.0-dev.38) (2026-11-05)
+
+### ✨ New Features
+
+* Navigation bar below Reels in half the screen, comments open all the way there ([d69079a](https://github.com/JacksonJones2003/Instagram-immersive/commit/d69079aabd25c226d339a1614f4a2c6a264e62a4))
+
 ## [1.0.0-dev.37](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.36...v1.0.0-dev.37) (2026-11-05)
 
 ### 🐛 Bug Fixes
