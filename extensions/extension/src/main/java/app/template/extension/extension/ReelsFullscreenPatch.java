@@ -389,6 +389,9 @@ public final class ReelsFullscreenPatch {
         /** A sheet like the comments, moved into the same half as the reel. */
         private WeakReference<View> halfSheet = new WeakReference<>(null);
         private int sheetSearches;
+        private int sheetWidth;
+        /** Whether the rail lies at the bottom because Reels are in half the screen. */
+        private boolean railBottomForHalf;
         /** Side of the screen the half with the sensors is on, learned when that half is lifted. */
         private int sensorSide;
         /** Side the last fold movement chose, in the terms of the phone itself. */
@@ -2017,6 +2020,11 @@ public final class ReelsFullscreenPatch {
                 leaveRailBottom();
                 return;
             }
+            // In half the screen the rail stays at the bottom whatever the reel is like.
+            if (railBottomForHalf) {
+                placeRailBottom(decor);
+                return;
+            }
             View page = currentPage(reels);
             // While a page is being scrolled in, everything stays as it is.
             if (page != null) {
@@ -2108,7 +2116,8 @@ public final class ReelsFullscreenPatch {
             float[] origin = hostOrigin(rail, host);
             float centerX = origin[0] + host.getWidth() / 2f;
             float centerY = origin[1] + host.getHeight() / 2f;
-            float goalX = decor.getWidth() / 2f;
+            float[] half = shownSide != 0 ? halfBounds(decor) : null;
+            float goalX = half != null ? (half[0] + half[1]) / 2f : decor.getWidth() / 2f;
             float goalY = decor.getHeight() - bottom - RAIL_BAR_MARGIN_DP * density - host.getWidth() / 2f;
 
             host.setPivotX(host.getWidth() / 2f);
@@ -2186,7 +2195,7 @@ public final class ReelsFullscreenPatch {
          * whole screen again.
          */
         private void updateHalf(View reels) {
-            boolean wanted = wideLayout && !railBottom;
+            boolean wanted = wideLayout && (!railBottom || railBottomForHalf);
             if (wanted && !listening) startHalf();
             else if (!wanted && listening) stopHalf();
             if (listening) halfPager = new WeakReference<>(reels);
@@ -2215,34 +2224,40 @@ public final class ReelsFullscreenPatch {
                 sheet = findSheet(decor, reels, lastRail.get(), decor);
                 if (sheet == null) return;
                 halfSheet = new WeakReference<>(sheet);
+                sheetWidth = sheet.getLayoutParams() == null ? 0 : sheet.getLayoutParams().width;
             }
 
-            float density = activity.getResources().getDisplayMetrics().density;
-            float gap = HALF_GAP_DP * density;
-            float hinge = decor.getWidth() / 2f;
-            float start = shownSide < 0 ? gap : hinge + gap;
-            float end = shownSide < 0 ? hinge - gap : decor.getWidth() - gap;
+            float[] half = halfBounds(decor);
+            float start = half[0];
+            float end = half[1];
 
+            // The sheet is laid out as wide as the half rather than scaled down, so it can still
+            // be pulled up to its full height.
+            ViewGroup.LayoutParams params = sheet.getLayoutParams();
+            int width = Math.round(end - start);
+            if (params != null && sheet.getWidth() > width + 2 && params.width != width) {
+                if (halfSheet.get() != sheet || sheetWidth == 0) sheetWidth = params.width;
+                params.width = width;
+                sheet.setLayoutParams(params);
+                layoutChanged = true;
+            }
             float left = sheet.getLeft();
             for (View view = sheet; view.getParent() instanceof View; ) {
                 view = (View) view.getParent();
                 left += view.getLeft();
             }
-            float scale = Math.min(1f, (end - start) / Math.max(1f, sheet.getWidth()));
-            // Scaled from the middle of its bottom edge, so it still rises from the bottom.
-            sheet.setPivotX(sheet.getWidth() / 2f);
-            sheet.setPivotY(sheet.getHeight());
-            sheet.setScaleX(scale);
-            sheet.setScaleY(scale);
             sheet.setTranslationX((start + end) / 2f - (left + sheet.getWidth() / 2f));
         }
 
         private void resetSheet() {
             View sheet = halfSheet.get();
             if (sheet != null) {
-                sheet.setScaleX(1f);
-                sheet.setScaleY(1f);
                 sheet.setTranslationX(0f);
+                ViewGroup.LayoutParams params = sheet.getLayoutParams();
+                if (params != null && params.width != sheetWidth) {
+                    params.width = sheetWidth;
+                    sheet.setLayoutParams(params);
+                }
             }
             halfSheet = new WeakReference<>(null);
         }
@@ -2257,7 +2272,7 @@ public final class ReelsFullscreenPatch {
                 view.getLocationInWindow(hitLocation);
                 float width = decor.getWidth();
                 float height = decor.getHeight();
-                boolean sheet = view.getWidth() >= 0.35f * width && view.getWidth() <= 0.95f * width
+                boolean sheet = view.getWidth() >= 0.3f * width && view.getWidth() <= 0.95f * width
                         && hitLocation[1] + view.getHeight() >= 0.94f * height
                         && hitLocation[1] >= 0.1f * height && hitLocation[1] <= 0.75f * height;
                 if (sheet) return view;
@@ -2307,12 +2322,11 @@ public final class ReelsFullscreenPatch {
                     pager.setScaleX(1f);
                     pager.setScaleY(1f);
                     pager.setTranslationX(0f);
+                    pager.setTranslationY(0f);
                 }
-                View rail = lastRail.get();
-                if (rail != null) {
-                    rail.animate().cancel();
-                    rail.setAlpha(1f);
-                    rail.setVisibility(View.VISIBLE);
+                if (railBottomForHalf) {
+                    railBottomForHalf = false;
+                    leaveRailBottom();
                 }
             }
         }
@@ -2387,6 +2401,13 @@ public final class ReelsFullscreenPatch {
             if (pager != null) placeHalf(pager, true);
         }
 
+        /** Left and right edge of the half of the screen Reels are in, with a gap to the fold. */
+        private float[] halfBounds(View decor) {
+            float gap = HALF_GAP_DP * activity.getResources().getDisplayMetrics().density;
+            float hinge = decor.getWidth() / 2f;
+            return shownSide < 0 ? new float[]{gap, hinge - gap} : new float[]{hinge + gap, decor.getWidth() - gap};
+        }
+
         /** Scales Reels down to fit the chosen half of the screen and moves them over there. */
         private void placeHalf(View pager, boolean animate) {
             View decor = activity.getWindow().getDecorView();
@@ -2396,12 +2417,11 @@ public final class ReelsFullscreenPatch {
                 shownSide = 0;
                 resetSheet();
                 pager.animate().cancel();
-                pager.animate().scaleX(1f).scaleY(1f).translationX(0f)
+                pager.animate().scaleX(1f).scaleY(1f).translationX(0f).translationY(0f)
                         .setDuration(HALF_MOVE_MS).setInterpolator(new DecelerateInterpolator()).start();
-                if (rail != null) {
-                    rail.setVisibility(View.VISIBLE);
-                    rail.setAlpha(0f);
-                    rail.animate().alpha(1f).setDuration(HALF_MOVE_MS).start();
+                if (railBottomForHalf) {
+                    railBottomForHalf = false;
+                    leaveRailBottom();
                 }
                 return;
             }
@@ -2409,12 +2429,11 @@ public final class ReelsFullscreenPatch {
             float density = activity.getResources().getDisplayMetrics().density;
             float gap = HALF_GAP_DP * density;
 
-            // The navigation rail makes way, the reel can use all of its half.
-            if (rail != null && rail.getVisibility() == View.VISIBLE && shownSide == 0) {
-                rail.animate().alpha(0f).setDuration(HALF_MOVE_MS / 2)
-                        .withEndAction(() -> {
-                            if (shownSide != 0) rail.setVisibility(View.INVISIBLE);
-                        }).start();
+            // The navigation rail makes way and lies along the bottom of the half, like the tab bar
+            // of the cover screen.
+            if (rail != null && !railBottom) {
+                enterRailBottom(rail);
+                railBottomForHalf = railBottom;
             }
             // Moved out of its own place, the pager must not be cut off by the views around it.
             float pagerX = pager.getLeft();
@@ -2428,6 +2447,9 @@ public final class ReelsFullscreenPatch {
             float hinge = decor.getWidth() / 2f;
             float start = halfSide < 0 ? gap : hinge + gap;
             float end = halfSide < 0 ? hinge - gap : decor.getWidth() - gap;
+            // Shifted up so the navigation bar fits underneath it.
+            View host = bottomHost.get();
+            float lift = host == null ? 0f : (host.getWidth() + RAIL_BAR_MARGIN_DP * density) / 2f;
 
             // The reel itself, its buttons go on top of it.
             float[] extent = pageExtent(pager);
@@ -2441,14 +2463,19 @@ public final class ReelsFullscreenPatch {
                 halfScale = scale;
                 halfMove = moveX;
                 pager.animate().cancel();
-                pager.animate().scaleX(scale).scaleY(scale).translationX(moveX)
+                pager.animate().scaleX(scale).scaleY(scale).translationX(moveX).translationY(-lift)
                         .setDuration(HALF_MOVE_MS).setInterpolator(new DecelerateInterpolator()).start();
-            } else if (Math.abs(halfScale - scale) > 0.004f || Math.abs(halfMove - moveX) > 2f) {
+            } else if (Math.abs(halfScale - scale) > 0.004f || Math.abs(halfMove - moveX) > 2f
+                    || Math.abs(pager.getTranslationY() + lift) > 2f && !pager.hasTransientState()) {
                 // The width a reel needs changes from reel to reel. Only a new goal starts a new
                 // movement: starting one on every frame would keep it from ever moving.
+                if (Math.abs(halfScale - scale) <= 0.004f && Math.abs(halfMove - moveX) <= 2f) {
+                    pager.setTranslationY(-lift);
+                    return;
+                }
                 halfScale = scale;
                 halfMove = moveX;
-                pager.animate().scaleX(scale).scaleY(scale).translationX(moveX)
+                pager.animate().scaleX(scale).scaleY(scale).translationX(moveX).translationY(-lift)
                         .setDuration(HALF_MOVE_MS / 2).setInterpolator(new DecelerateInterpolator()).start();
             }
         }
