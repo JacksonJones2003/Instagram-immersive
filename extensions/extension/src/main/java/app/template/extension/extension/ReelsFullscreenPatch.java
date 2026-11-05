@@ -119,6 +119,7 @@ public final class ReelsFullscreenPatch {
     // A reel counts as reaching the navigation rail when its picture starts this close to it.
     private static final int RAIL_REACH_PX = 16;
     private static final int RAIL_BAR_MARGIN_DP = 10;
+    private static final int RAIL_BAR_Z_DP = 2;
     // The phone counts as partly folded between these hinge angles.
     private static final float HALF_FOLD_MIN = 25f;
     private static final float HALF_FOLD_MAX = 155f;
@@ -2068,6 +2069,8 @@ public final class ReelsFullscreenPatch {
             rail.setLayoutParams(railParams);
             if (rail instanceof ViewGroup) ((ViewGroup) rail).setClipChildren(false);
             if (rail.getParent() instanceof ViewGroup) ((ViewGroup) rail.getParent()).setClipChildren(false);
+            // The screen next to the rail comes after it and would be drawn over the buttons.
+            rail.setTranslationZ(RAIL_BAR_Z_DP * activity.getResources().getDisplayMetrics().density);
 
             bottomRail = new WeakReference<>(rail);
             bottomHost = new WeakReference<>(host);
@@ -2096,6 +2099,7 @@ public final class ReelsFullscreenPatch {
                     host.setLayoutParams(params);
                 }
             }
+            if (rail != null) rail.setTranslationZ(0f);
             if (rail != null && rail.getLayoutParams() != null) {
                 ViewGroup.LayoutParams params = rail.getLayoutParams();
                 params.width = railWidth;
