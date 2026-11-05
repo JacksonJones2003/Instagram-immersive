@@ -109,6 +109,9 @@ public final class ReelsFullscreenPatch {
     private static final int ROW_MARGIN_DP = 16;
     private static final int ROW_FROM_BOTTOM_DP = 74;
     private static final int MIN_ROW_BUTTONS = 5;
+    // A reel counts as reaching the navigation rail when its picture starts this close to it.
+    private static final int RAIL_REACH_PX = 16;
+    private static final int RAIL_BAR_MARGIN_DP = 10;
     private static final int MAX_DUMP_DEPTH = 18;
     private static final int MAX_DUMP_LINES = 400;
     private static final long DUMP_DELAY_MS = 2500;
@@ -152,6 +155,7 @@ public final class ReelsFullscreenPatch {
     private static boolean expandMedia;
     private static boolean moveButtons;
     private static boolean buttonsRow;
+    private static boolean railToBottom;
     private static boolean seamScrubber;
     private static boolean restartButton;
     private static boolean glassBar;
@@ -198,6 +202,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Reels buttons below wide videos" patch. */
     public static void enableButtonsRow() {
         buttonsRow = true;
+    }
+
+    /** Injection point. Added by the "Navigation rail below wide reels" patch. */
+    public static void enableRailToBottom() {
+        railToBottom = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -322,6 +331,16 @@ public final class ReelsFullscreenPatch {
         private WeakReference<View> lastRailHost = new WeakReference<>(null);
         private ViewGroup styledHost;
         private boolean railHovering;
+        /** Whether the navigation rail is lying along the bottom of the screen, for a wide reel. */
+        private boolean railBottom;
+        private WeakReference<View> bottomRail = new WeakReference<>(null);
+        private WeakReference<View> bottomHost = new WeakReference<>(null);
+        private int railWidth;
+        private int hostWidth;
+        private int hostHeight;
+        private boolean bottomTouch;
+        private final Matrix bottomMatrix = new Matrix();
+        private final float[] bottomPoint = new float[2];
         private WeakReference<View> lastTabBarLine = new WeakReference<>(null);
         private boolean hovering;
         private boolean barRaised;
@@ -441,8 +460,9 @@ public final class ReelsFullscreenPatch {
                 if (changed) layoutChanged = true;
             }
             wideLayout = navigationRailShown(decor);
-            railShown = seamScrubber && wideLayout;
+            railShown = seamScrubber && wideLayout && !railBottom;
             fill(reels);
+            if (railToBottom) updateRailBottom(reels, decor);
             if (seamScrubber) updateSeamBar(reels, decor, top, bottom);
             if (debug) watchPage(reels);
         }
@@ -745,6 +765,7 @@ public final class ReelsFullscreenPatch {
 
         /** Whether the touch of the window is taken away from Instagram. */
         private boolean onWindowTouch(MotionEvent event) {
+            if (railBottom && bottomRailTouch(event)) return true;
             if (!glassBar) return false;
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
@@ -1194,7 +1215,7 @@ public final class ReelsFullscreenPatch {
             // Next to the rail rather than on top of the window, so sheets that open over the
             // rail, like comments, cover the button as well.
             View root = rail == null ? null : (View) rail.getParent();
-            if (rail == null || !rail.isShown() || rail.getWidth() == 0 || !(root instanceof ViewGroup)) {
+            if (rail == null || !rail.isShown() || rail.getWidth() <= 1 || railBottom || !(root instanceof ViewGroup)) {
                 if (restartView != null && restartView.getParent() instanceof ViewGroup) {
                     ((ViewGroup) restartView.getParent()).removeView(restartView);
                 }
@@ -1594,7 +1615,8 @@ public final class ReelsFullscreenPatch {
             View box = media instanceof ViewGroup ? findLetterboxed((ViewGroup) media) : null;
             Rect boxRect = new Rect();
             Rect pageRect = new Rect();
-            if (box != null && box.getScaleX() > 1f && box.getGlobalVisibleRect(boxRect)
+            Integer grown = box == null ? null : enlarged.get(box);
+            if (grown != null && grown == pass && box.getGlobalVisibleRect(boxRect)
                     && content.getGlobalVisibleRect(pageRect) && pageRect.width() > 0) {
                 wide = boxRect.width() >= ROW_WIDTH_SHARE * pageRect.width();
             }
@@ -1847,6 +1869,7 @@ public final class ReelsFullscreenPatch {
         }
 
         private void restore(View decor) {
+            leaveRailBottom();
             View rail = paddedRail.get();
             if (railPadding != null && rail != null) {
                 rail.setPadding(railPadding[0], railPadding[1], railPadding[2], railPadding[3]);
@@ -1903,6 +1926,180 @@ public final class ReelsFullscreenPatch {
             decor.requestApplyInsets();
             // Everything goes back in one layout, the frame before it would show half of it.
             layoutChanged = true;
+        }
+
+        /**
+         * A wide reel that reaches the navigation rail could use its room as well. The rail then
+         * shrinks out of the way of the page and its buttons are laid along the bottom of the
+         * screen instead, until a narrow reel comes along.
+         */
+        private void updateRailBottom(View reels, View decor) {
+            View rail = findNavigationRail(decor);
+            if (rail == null || !rail.isShown()) {
+                leaveRailBottom();
+                return;
+            }
+            View page = currentPage(reels);
+            // While a page is being scrolled in, everything stays as it is.
+            if (page != null) {
+                boolean wide = reachesRail(page, rail);
+                if (wide && !railBottom) enterRailBottom(rail);
+                else if (!wide && railBottom) leaveRailBottom();
+            }
+            if (railBottom) placeRailBottom(decor);
+        }
+
+        private boolean reachesRail(View page, View rail) {
+            View content = findContent(page, 0);
+            if (!(content instanceof ViewGroup)) return false;
+            View media = mediaId == 0 ? null : content.findViewById(mediaId);
+            View box = media instanceof ViewGroup ? findLetterboxed((ViewGroup) media) : null;
+            Integer grown = box == null ? null : enlarged.get(box);
+            if (grown == null || grown != pass) return false;
+
+            Rect boxRect = new Rect();
+            Rect pageRect = new Rect();
+            if (!box.getGlobalVisibleRect(boxRect) || !content.getGlobalVisibleRect(pageRect)) return false;
+            return boxRect.left <= pageRect.left + RAIL_REACH_PX && boxRect.width() >= ROW_WIDTH_SHARE * pageRect.width();
+        }
+
+        private void enterRailBottom(View rail) {
+            View host = findButtons(rail);
+            if (host == null || host.getWidth() == 0 || host.getHeight() == 0) return;
+            ViewGroup.LayoutParams railParams = rail.getLayoutParams();
+            ViewGroup.LayoutParams hostParams = host.getLayoutParams();
+            if (railParams == null || hostParams == null) return;
+
+            railWidth = railParams.width;
+            hostWidth = hostParams.width;
+            hostHeight = hostParams.height;
+            // The buttons keep their size while the rail around them shrinks to nothing and the
+            // page grows into its room.
+            hostParams.width = host.getWidth();
+            hostParams.height = host.getHeight();
+            host.setLayoutParams(hostParams);
+            railParams.width = 1;
+            rail.setLayoutParams(railParams);
+            if (rail instanceof ViewGroup) ((ViewGroup) rail).setClipChildren(false);
+            if (rail.getParent() instanceof ViewGroup) ((ViewGroup) rail.getParent()).setClipChildren(false);
+
+            bottomRail = new WeakReference<>(rail);
+            bottomHost = new WeakReference<>(host);
+            railBottom = true;
+            layoutChanged = true;
+        }
+
+        private void leaveRailBottom() {
+            if (!railBottom) return;
+            railBottom = false;
+            bottomTouch = false;
+            View rail = bottomRail.get();
+            View host = bottomHost.get();
+            if (host != null) {
+                host.setRotation(0f);
+                host.setTranslationX(0f);
+                host.setTranslationY(0f);
+                if (host instanceof ViewGroup) {
+                    ViewGroup group = (ViewGroup) host;
+                    for (int i = 0; i < group.getChildCount(); i++) group.getChildAt(i).setRotation(0f);
+                }
+                ViewGroup.LayoutParams params = host.getLayoutParams();
+                if (params != null) {
+                    params.width = hostWidth;
+                    params.height = hostHeight;
+                    host.setLayoutParams(params);
+                }
+            }
+            if (rail != null && rail.getLayoutParams() != null) {
+                ViewGroup.LayoutParams params = rail.getLayoutParams();
+                params.width = railWidth;
+                rail.setLayoutParams(params);
+            }
+            layoutChanged = true;
+        }
+
+        /** Turns the buttons of the rail on their side and puts them in the middle of the bottom. */
+        private void placeRailBottom(View decor) {
+            View rail = bottomRail.get();
+            View host = bottomHost.get();
+            if (rail == null || host == null || host.getWidth() == 0) return;
+
+            float density = activity.getResources().getDisplayMetrics().density;
+            WindowInsets insets = decor.getRootWindowInsets();
+            int bottom = insets == null ? 0 : insets.getStableInsetBottom();
+            float[] origin = hostOrigin(rail, host);
+            float centerX = origin[0] + host.getWidth() / 2f;
+            float centerY = origin[1] + host.getHeight() / 2f;
+            float goalX = decor.getWidth() / 2f;
+            float goalY = decor.getHeight() - bottom - RAIL_BAR_MARGIN_DP * density - host.getWidth() / 2f;
+
+            host.setPivotX(host.getWidth() / 2f);
+            host.setPivotY(host.getHeight() / 2f);
+            host.setRotation(-90f);
+            host.setTranslationX(goalX - centerX);
+            host.setTranslationY(goalY - centerY);
+            // Every button stands upright again.
+            if (host instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) host;
+                for (int i = 0; i < group.getChildCount(); i++) {
+                    View child = group.getChildAt(i);
+                    child.setPivotX(child.getWidth() / 2f);
+                    child.setPivotY(child.getHeight() / 2f);
+                    child.setRotation(90f);
+                }
+            }
+        }
+
+        /** Where the buttons of the rail are laid out in the window, before they are turned. */
+        private float[] hostOrigin(View rail, View host) {
+            rail.getLocationInWindow(hitLocation);
+            float x = hitLocation[0];
+            float y = hitLocation[1];
+            for (View view = host; view != rail; view = (View) view.getParent()) {
+                x += view.getLeft();
+                y += view.getTop();
+            }
+            return new float[]{x, y};
+        }
+
+        /**
+         * The turned buttons lie outside of the rail, so touches never reach them by themselves.
+         * A tap on one of them is passed on as a click on that button.
+         */
+        private boolean bottomRailTouch(MotionEvent event) {
+            View rail = bottomRail.get();
+            View host = bottomHost.get();
+            if (rail == null || host == null) return false;
+            int action = event.getActionMasked();
+            if (action != MotionEvent.ACTION_DOWN && !bottomTouch) return false;
+
+            // Back into the coordinates of the buttons.
+            float[] origin = hostOrigin(rail, host);
+            bottomPoint[0] = event.getX() - origin[0];
+            bottomPoint[1] = event.getY() - origin[1];
+            host.getMatrix().invert(bottomMatrix);
+            bottomMatrix.mapPoints(bottomPoint);
+            boolean inside = bottomPoint[0] >= 0 && bottomPoint[0] < host.getWidth()
+                    && bottomPoint[1] >= 0 && bottomPoint[1] < host.getHeight();
+
+            switch (action) {
+                case MotionEvent.ACTION_DOWN:
+                    bottomTouch = inside;
+                    if (inside && railGlass != null) barPress(true, bottomPoint[1]);
+                    return inside;
+                case MotionEvent.ACTION_UP:
+                    bottomTouch = false;
+                    if (railGlass != null) railGlass.unpress();
+                    View button = inside ? buttonAt(host, bottomPoint[1], true) : null;
+                    if (button != null) button.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    bottomTouch = false;
+                    if (railGlass != null) railGlass.unpress();
+                    return true;
+                default:
+                    return true;
+            }
         }
 
         private View currentPage(View reels) {

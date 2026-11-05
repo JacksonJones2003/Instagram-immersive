@@ -189,6 +189,25 @@ val reelsButtonsRowPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val railBelowWideReelsPatch = bytecodePatch(
+    name = "Navigation rail below wide reels",
+    description = "On large screens, moves the navigation rail to the bottom of the screen when a wide reel " +
+        "reaches it, so the reel can use the whole width, and back to the side for narrow reels.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableRailToBottom()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +
