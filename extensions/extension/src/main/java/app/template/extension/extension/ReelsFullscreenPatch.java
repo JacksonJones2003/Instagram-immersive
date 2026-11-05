@@ -383,6 +383,9 @@ public final class ReelsFullscreenPatch {
         /** Side of the screen the reels are moved to: -1 left, 1 right, 0 the whole screen. */
         private int halfSide;
         private int shownSide;
+        /** Size and place the pager is on its way to, in half the screen. */
+        private float halfScale = 1f;
+        private float halfMove;
         /** Side of the screen the half with the sensors is on, learned when that half is lifted. */
         private int sensorSide;
         /** Side the last fold movement chose, in the terms of the phone itself. */
@@ -2350,14 +2353,18 @@ public final class ReelsFullscreenPatch {
             pager.setPivotY(pager.getHeight() / 2f);
             if (animate || shownSide == 0) {
                 shownSide = halfSide;
+                halfScale = scale;
+                halfMove = moveX;
                 pager.animate().cancel();
                 pager.animate().scaleX(scale).scaleY(scale).translationX(moveX)
                         .setDuration(HALF_MOVE_MS).setInterpolator(new DecelerateInterpolator()).start();
-            } else if (Math.abs(pager.getScaleX() - scale) > 0.002f
-                    || Math.abs(pager.getTranslationX() - moveX) > 1f) {
-                // The width a reel needs changes from reel to reel.
+            } else if (Math.abs(halfScale - scale) > 0.004f || Math.abs(halfMove - moveX) > 2f) {
+                // The width a reel needs changes from reel to reel. Only a new goal starts a new
+                // movement: starting one on every frame would keep it from ever moving.
+                halfScale = scale;
+                halfMove = moveX;
                 pager.animate().scaleX(scale).scaleY(scale).translationX(moveX)
-                        .setDuration(HALF_MOVE_MS / 2).start();
+                        .setDuration(HALF_MOVE_MS / 2).setInterpolator(new DecelerateInterpolator()).start();
             }
         }
 
