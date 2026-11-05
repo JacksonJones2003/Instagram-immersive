@@ -1,3 +1,9 @@
+## [1.0.0-dev.36](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.35...v1.0.0-dev.36) (2026-11-05)
+
+### ✨ New Features
+
+* Comments follow Reels into the flat half ([b401701](https://github.com/JacksonJones2003/Instagram-immersive/commit/b4017019b5aafe55e7b761bacf3fd0aa76400470))
+
 ## [1.0.0-dev.35](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.34...v1.0.0-dev.35) (2026-11-05)
 
 ### 🐛 Bug Fixes
