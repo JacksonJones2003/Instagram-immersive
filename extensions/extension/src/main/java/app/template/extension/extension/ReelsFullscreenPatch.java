@@ -103,6 +103,12 @@ public final class ReelsFullscreenPatch {
     private static final int SEAM_TOUCH_WIDTH_DP = 28;
     // Column with the like, comment and share buttons.
     private static final String BUTTONS_ID = "clips_ufi_component";
+    private static final String ALBUM_ID = "media_album_art_button";
+    // The buttons go in a row when the video or photo is at least this share of the page wide.
+    private static final float ROW_WIDTH_SHARE = 0.85f;
+    private static final int ROW_MARGIN_DP = 16;
+    private static final int ROW_FROM_BOTTOM_DP = 74;
+    private static final int MIN_ROW_BUTTONS = 5;
     private static final int MAX_DUMP_DEPTH = 18;
     private static final int MAX_DUMP_LINES = 400;
     private static final long DUMP_DELAY_MS = 2500;
@@ -145,6 +151,7 @@ public final class ReelsFullscreenPatch {
     private static boolean debug;
     private static boolean expandMedia;
     private static boolean moveButtons;
+    private static boolean buttonsRow;
     private static boolean seamScrubber;
     private static boolean restartButton;
     private static boolean glassBar;
@@ -186,6 +193,11 @@ public final class ReelsFullscreenPatch {
     /** Injection point. Added by the "Replace create button with messages" patch. */
     public static void enableMessagesTab() {
         messagesTab = true;
+    }
+
+    /** Injection point. Added by the "Reels buttons below wide videos" patch. */
+    public static void enableButtonsRow() {
+        buttonsRow = true;
     }
 
     /** Injection point. Added by the "Reels fullscreen debug" patch. */
@@ -263,6 +275,7 @@ public final class ReelsFullscreenPatch {
         private final int navigationRailId;
         private final int mediaId;
         private final int buttonsId;
+        private final int albumId;
         private final int scrubberId;
         private final int contentId;
         private final int tabBarLineId;
@@ -357,6 +370,7 @@ public final class ReelsFullscreenPatch {
             navigationRailId = resources.getIdentifier(NAVIGATION_RAIL_ID, "id", packageName);
             mediaId = resources.getIdentifier(MEDIA_ID, "id", packageName);
             buttonsId = resources.getIdentifier(BUTTONS_ID, "id", packageName);
+            albumId = resources.getIdentifier(ALBUM_ID, "id", packageName);
             scrubberId = resources.getIdentifier(SCRUBBER_ID, "id", packageName);
             contentId = resources.getIdentifier(CONTENT_ID, "id", packageName);
             tabBarLineId = resources.getIdentifier(TAB_BAR_LINE_ID, "id", packageName);
@@ -1429,6 +1443,7 @@ public final class ReelsFullscreenPatch {
                 scale((ViewGroup) content);
                 if (expandMedia) enlarge((ViewGroup) content);
                 if (moveButtons) moveButtons((ViewGroup) content);
+                if (buttonsRow) rowButtons((ViewGroup) content);
                 if (railShown) fade((ViewGroup) content);
             }
             // Instagram reuses these views for other reels, anything not confirmed in this pass
@@ -1562,12 +1577,124 @@ public final class ReelsFullscreenPatch {
             seamBar.show(scrubber, progress.getProgress() / (float) progress.getMax(), top, bottom);
         }
 
+        /**
+         * A video or photo that is enlarged to about the full width of the page runs underneath
+         * the column of like, comment and share buttons. Those then line up in a row at the bottom
+         * right instead, like below a post in the feed, and go back to a column for narrow reels.
+         *
+         * The column is turned on its side and every button in it is turned back upright and
+         * spaced out along the row, so Instagram keeps handling the buttons as before.
+         */
+        private void rowButtons(ViewGroup content) {
+            View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
+            if (!(buttons instanceof ViewGroup) || buttons.getParent() != content) return;
+
+            boolean wide = false;
+            View media = mediaId == 0 ? null : content.findViewById(mediaId);
+            View box = media instanceof ViewGroup ? findLetterboxed((ViewGroup) media) : null;
+            Rect boxRect = new Rect();
+            Rect pageRect = new Rect();
+            if (box != null && box.getScaleX() > 1f && box.getGlobalVisibleRect(boxRect)
+                    && content.getGlobalVisibleRect(pageRect) && pageRect.width() > 0) {
+                wide = boxRect.width() >= ROW_WIDTH_SHARE * pageRect.width();
+            }
+            if (!wide) {
+                // Back to a column. The buttons inside it are put back by the pass bookkeeping.
+                if (buttons.getRotation() != 0f) {
+                    buttons.setRotation(0f);
+                    buttons.setTranslationY(0f);
+                }
+                return;
+            }
+
+            ViewGroup list = findButtonList((ViewGroup) buttons, 0);
+            if (list == null) return;
+            float pageScale = content.getScaleY();
+            if (pageScale <= 0) return;
+            float density = activity.getResources().getDisplayMetrics().density;
+
+            // Offset of the list inside the column.
+            float listX = 0;
+            float listY = 0;
+            for (View view = list; view != buttons; view = (View) view.getParent()) {
+                listX += view.getLeft();
+                listY += view.getTop();
+            }
+
+            // Lay the buttons out one after the other: a button, its count close to it, then a gap.
+            float start = -1;
+            float cursor = 0;
+            float across = 0;
+            float lastGap = 0;
+            for (int i = 0; i < list.getChildCount(); i++) {
+                View child = list.getChildAt(i);
+                if (child.getVisibility() != View.VISIBLE || child.getHeight() == 0) continue;
+                if (start < 0) {
+                    start = child.getTop();
+                    cursor = start;
+                    across = listX + child.getLeft() + child.getWidth() / 2f;
+                }
+                // The album art does not fit in the row, it stays out of sight.
+                if (child.findViewById(albumId) != null && albumId != 0) {
+                    child.setAlpha(0f);
+                    faded.put(child, pass);
+                    continue;
+                }
+                boolean icon = Math.abs(child.getWidth() - child.getHeight()) < 0.3f * child.getHeight();
+                // A count is drawn in the middle of a wide box, its text is narrower than the box.
+                float extent = icon ? child.getWidth() : child.getWidth() * 0.66f;
+                float center = cursor + extent / 2f;
+                child.setPivotX(child.getWidth() / 2f);
+                child.setPivotY(child.getHeight() / 2f);
+                child.setRotation(90f);
+                child.setTranslationX(0f);
+                child.setTranslationY(center - (child.getTop() + child.getHeight() / 2f));
+                enlarged.put(child, pass);
+                lastGap = (icon ? 4 : 16) * density;
+                cursor += extent + lastGap;
+            }
+            if (start < 0) return;
+            float length = cursor - lastGap - start;
+            ((ViewGroup) buttons).setClipChildren(false);
+            list.setClipChildren(false);
+
+            // Where the row goes on the page, which may itself be scaled and moved.
+            float visibleRight = content.getWidth() / 2f + content.getWidth() / (2f * pageScale);
+            float visibleBottom = (content.getHeight() - content.getTranslationY()) / pageScale;
+            float rowEnd = visibleRight - ROW_MARGIN_DP * density / pageScale;
+            float rowMiddle = visibleBottom - ROW_FROM_BOTTOM_DP * density / pageScale;
+
+            // Turned a quarter to the left around its corner, the column maps its point (x, y)
+            // to (left + moveX + y, top + moveY - x) on the page.
+            buttons.setPivotX(0f);
+            buttons.setPivotY(0f);
+            buttons.setRotation(-90f);
+            buttons.setScaleX(1f);
+            buttons.setScaleY(1f);
+            buttons.setTranslationX(rowEnd - length - buttons.getLeft() - (listY + start));
+            buttons.setTranslationY(rowMiddle - buttons.getTop() + across);
+            enlarged.put(buttons, pass);
+        }
+
+        /** The innermost group in the column that holds all of its buttons. */
+        private ViewGroup findButtonList(ViewGroup group, int depth) {
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (child instanceof ViewGroup && depth < 4) {
+                    ViewGroup inner = findButtonList((ViewGroup) child, depth + 1);
+                    if (inner != null) return inner;
+                }
+            }
+            return group.getChildCount() >= MIN_ROW_BUTTONS ? group : null;
+        }
+
         /** Moves the like, comment and share buttons to the right edge of the page. */
         private void moveButtons(ViewGroup content) {
             View buttons = buttonsId == 0 ? null : content.findViewById(buttonsId);
             if (buttons == null || buttons.getParent() != content) return;
             float pageScale = content.getScaleY();
             if (pageScale <= 0) return;
+            if (buttons.getRotation() != 0f) return;
 
             float visibleRight = content.getWidth() / 2f + content.getWidth() / (2f * pageScale);
             float shift = visibleRight - buttons.getRight();
@@ -1624,6 +1751,7 @@ public final class ReelsFullscreenPatch {
                     view.setScaleY(1f);
                     view.setTranslationX(0f);
                     view.setTranslationY(0f);
+                    view.setRotation(0f);
                 }
                 iterator.remove();
             }

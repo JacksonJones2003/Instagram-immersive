@@ -170,6 +170,25 @@ val replaceCreateWithMessagesPatch = bytecodePatch(
 }
 
 @Suppress("unused")
+val reelsButtonsRowPatch = bytecodePatch(
+    name = "Reels buttons below wide videos",
+    description = "Lines the like, comment and share buttons up in a row at the bottom when a video or photo " +
+        "in Reels is enlarged to the full width, and puts them back in a column for narrow reels.",
+    default = true,
+) {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+
+    dependsOn(reelsFullscreenPatch)
+
+    execute {
+        InstagramAppShellOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static {}, $EXTENSION_CLASS->enableButtonsRow()V",
+        )
+    }
+}
+
+@Suppress("unused")
 val reelsFullscreenDebugPatch = bytecodePatch(
     name = "Reels fullscreen debug",
     description = "Copies a description of the layout of each reel to the clipboard a few seconds " +
