@@ -1,3 +1,9 @@
+## [1.0.0-dev.31](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.30...v1.0.0-dev.31) (2026-11-05)
+
+### ✨ New Features
+
+* Add Reels buttons below wide videos patch ([ede60f5](https://github.com/JacksonJones2003/Instagram-immersive/commit/ede60f58a1bf26634e74f1f20c50d204ddda94c7))
+
 ## [1.0.0-dev.30](https://github.com/JacksonJones2003/Instagram-immersive/compare/v1.0.0-dev.29...v1.0.0-dev.30) (2026-10-14)
 
 ### 🐛 Bug Fixes
